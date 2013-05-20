@@ -24,12 +24,30 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
     catalogFile = False
     catalog = None
     lastDir = None
+    mode = "edit"
+    info = False
 
     def run(self, action=None):
         # list servers
         self.items = self.loadServerList()
-        self.items.insert(0, "Add new server")
-        self.show_quick_panel(self.items, self.handleServerSelect)
+        items = []
+        for name in self.servers:
+            items.append([
+                "%s (%s)" % (name, self.servers[name]["settings"]["host"]),
+                "User: %s, Path: %s" % (
+                    self.servers[name]["settings"]["user"],
+                    self.servers[name]["settings"]["remote_path"]
+                )
+            ])
+        items.insert(0, [
+            "Quick connect",
+            "Just enter a host and a username"
+        ])
+        items.insert(0, [
+            "Add a new server",
+            "Complete new server details to quickly connect in future"
+        ])
+        self.show_quick_panel(items, self.handleServerSelect)
 
         # Parse them for server names/info and store in self.servers[name]
         # where name is the file name less the ".server"
@@ -76,8 +94,11 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
         if selection is 0:
             # User has requested to add a new server
             sublime.error_message("TODO")
+        if selection is 1:
+            # User has requested to quick connect
+            sublime.error_message("TODO")
         else:
-            self.startServer(self.items[selection])
+            self.startServer(self.items[selection - 2])
 
     def startServer(self, serverName):
         try:
@@ -119,7 +140,10 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
         self.show_quick_panel(self.items, self.handleList)
 
     def handleList(self, selection):
-        print(selection, self.items[selection])
+        if self.info:
+            selected = self.items[selection][0]
+        else:
+            selected = self.items[selection]
         if selection == -1:
             try:
                 self.pq["p"].terminate()
@@ -140,14 +164,19 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
             # Folder options
             self.folderOptions = [
                 " : Back to list",
+                " : Turn %s extended info" % ("off" if self.info else "on"),
                 " : New file",
                 " : New folder",
-                " : Rename",
-                " : Chmod",
-                " : Delete"
+                " : Rename folder",
+                " : Chmod folder",
+                " : Delete folder",
+                " : Edit mode%s" % " - Selected" if self.mode == "edit" else "",
+                " : Rename mode%s" % " - Selected" if self.mode == "rename" else "",
+                " : Chmod mode%s" % " - Selected" if self.mode == "chmod" else "",
+                " : Delete mode%s" % " - Selected" if self.mode == "delete" else ""
             ]
             self.show_quick_panel(self.folderOptions, self.handleFolderOptions)
-        elif selection == 2 or self.items[selection][-1] == "/":
+        elif selection == 2 or selected[-1] == "/":
             # Up a folder
             if selection == 2:
                 if len(self.lastDir) <= 1:
@@ -159,7 +188,7 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
             else:
                 if not self.lastDir[-1] == "/":
                     self.lastDir += "/"
-                self.lastDir += self.items[selection]
+                self.lastDir += selected
             s = self.listDirectory(self.lastDir)
             if not s:
                 # error message
@@ -169,7 +198,7 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
             # Show the options
             self.show_quick_panel(self.items, self.handleList)
         else:
-            if not self.downloadAndOpen(self.items[selection]):
+            if not self.downloadAndOpen(selected):
                 return sublime.error_message(
                     "Error connecting to %s" % self.serverName
                 )
@@ -198,6 +227,11 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
             # Back to prev list
             self.show_quick_panel(self.items, self.handleList)
         elif selection == 1:
+            # Turn on / off extended file / folder info
+            self.info = self.info is False
+            self.listDirectory(self.lastDir)
+            self.show_quick_panel(self.items, self.handleList)
+        elif selection == 2:
             # new file
             caption = "Enter file name: "
             self.show_input_panel(
@@ -207,7 +241,7 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
                 self.handleChange,
                 self.handleCancel
             )
-        elif selection == 2:
+        elif selection == 3:
             # new folder
             caption = "Enter folder name: "
             self.show_input_panel(
@@ -217,14 +251,33 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
                 self.handleChange,
                 self.handleCancel
             )
-        elif selection == 3:
-            # rename
-            pass
         elif selection == 4:
+            # rename
+            caption = "Enter new name: "
+            self.show_input_panel(
+                caption,
+                "",
+                self.handleNewName,
+                self.handleChange,
+                self.handleCancel
+            )
+        elif selection == 5:
             # chmod
             pass
-        elif selection == 5:
+        elif selection == 6:
             # delete
+            pass
+        elif selection == 7:
+            # edit mode
+            pass
+        elif selection == 8:
+            # rename mode
+            pass
+        elif selection == 9:
+            # chmod mode
+            pass
+        elif selection == 10:
+            # delete mode
             pass
         else:
             # we shouldn't ever get here
@@ -276,12 +329,27 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
         self.show_quick_panel(self.items, self.handleList)
 
     def addOptionsToItems(self):
-        self.items.insert(0, " : Up a folder..")
-        self.items.insert(0, " : Folder actions")
-        self.items.insert(0, "%s:%s" % (
-            self.getServerSetting("host"),
-            self.lastDir
-        ))
+        if self.info:
+            self.items.insert(0, [
+                " : Up a folder..",
+                "Up to %s" % self.lastDir[0:self.lastDir.rfind("/", 0, -1) + 1]
+            ])
+            self.items.insert(0, [
+                " : Folder actions / Preferences",
+                "Manage folder %s or change settings" % self.lastDir
+            ])
+            self.items.insert(0, ["%s:%s  " % (
+                self.getServerSetting("host"),
+                self.lastDir
+            ), "%s mode" % self.mode.capitalize()])
+        else:
+            self.items.insert(0, " : Up a folder..")
+            self.items.insert(0, " : Folder actions / Preferences")
+            self.items.insert(0, "%s:%s - %s mode  " % (
+                self.getServerSetting("host"),
+                self.lastDir,
+                self.mode.capitalize()
+            ))
 
     def makeLocalFolder(self):
         # file selected, ensure local folder is available
@@ -368,9 +436,25 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
 
     def listDirectory(self, d):
         if self.catalog:
+            self.items = []
             # Display options based on the catalog and self.lastDir
             try:
-                self.items = self.catalog[d][:]
+                if self.info:
+                    for row in self.catalog[d]:
+                        self.items.append(
+                            [
+                                row[0],
+                                "%s %s %s %s" % (
+                                    row[1],
+                                    row[2],
+                                    "" if row[1][0] == "d" else row[3],
+                                    row[4]
+                                )
+                            ]
+                        )
+                else:
+                    for row in self.catalog[d]:
+                        self.items.append(row[0])
                 self.addOptionsToItems()
                 return True
             except:
@@ -404,9 +488,15 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
             f = la[-1].strip()
             if f:
                 if la[0][0] == "d":
-                    items.append(f + "/")
+                    if self.info:
+                        items.append([f + "/", "Folder"])
+                    else:
+                        items.append(f + "/")
                 else:
-                    items.append(f)
+                    if self.info:
+                        items.append([f, "File"])
+                    else:
+                        items.append(f)
         if len(items) >= 3:
             self.items = items[3:]
         self.addOptionsToItems()
@@ -565,14 +655,24 @@ class RemoteEditCommand(sublime_plugin.TextCommand):
                 elif not line:
                     struc[key] = options
                 else:
-                    sl = line.split(" ")
+                    sl = line.split()
                     name = sl[-1]
                     if len(sl) > 2 and name != "./" and name != "../":
-                        # name = "%s%s" % (
-                        #     name,
-                        #     "/" if sl[0][0] == "d" else ""
-                        # )
-                        options.append(name)
+                        options.append([
+                            name,
+                            sl[0],
+                            "%s %s" % (sl[2], sl[3]),
+                            sl[4],
+                            "%s %s" % (sl[5], sl[6])
+                        ])
+            # delete local files
+            f.close()
+            os.remove(localFile)
+            os.remove(os.path.join(
+                localFolder,
+                "%sSub.cat" % self.serverName
+            ))
+            # Save the python dict
             f = open(self.catalogFile, "wb")
             pickle.dump(struc, f)
             f.close()
