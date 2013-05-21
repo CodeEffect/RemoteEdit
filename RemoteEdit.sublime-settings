@@ -1,3 +1,4 @@
 {
+	"download_folder": "%UserProfile%\\Downloads",
 	"catalog_stale_after_hours": 24
 }
