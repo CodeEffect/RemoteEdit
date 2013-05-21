@@ -28,6 +28,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     lastDir = None
     mode = "edit"
     info = False
+    showHidden = False
+    dontEdit = [
+        "zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
+        "mp3", "wav", "bz", "pyc", "ico"
+    ]
 
     def run(self, action=None):
         # List servers
@@ -42,11 +47,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 )
             ])
         items.insert(0, [
-            "Quick connect",
-            "Just enter a host and a username"
+            " • Quick connect",
+            "Just enter a host and a username / password"
         ])
         items.insert(0, [
-            "Add a new server",
+            " • Add a new server",
             "Complete new server details to quickly connect in future"
         ])
         self.show_quick_panel(items, self.handleServerSelect)
@@ -61,6 +66,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # per server filename filters, add filters
         # filter by file size
         # filter by date modified
+        #
+        # Per server config settings:
+        # show / hide hidden files
+        # " : File options - Selecting opens immediately%s" % (" [SELECTED]" if self.mode == "edit" else ""),
+        # " : File options - Selecting shows maintenance menu%s" % (" [SELECTED]" if self.mode == "maintenance" else ""),
+        # " : Turn %s extended file / folder info" % ("off" if self.info else "on")
+        #
+        # BOOKMARKS!
 
     def handleServerSelect(self, selection):
         if selection is -1:
@@ -137,19 +150,24 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             )
         elif selection == 1:
             # Folder options
+            (head, tail) = self.splitPath(self.lastDir)
             self.folderOptions = [
-                " : Back to list",
-                " : Fuzzy file name from here",
-                " : Search within files from here",
-                " : Create a new file here",
-                " : Create a new folder here",
-                " : Rename current folder",
-                " : Chmod current folder",
-                " : Chown current folder",
-                " : Delete current folder (must be empty)",
-                " : Selecting opens files immediately%s" % (" [SELECTED]" if self.mode == "edit" else ""),
-                " : Selecting offers maintenance options%s" % (" [SELECTED]" if self.mode == "maintenance" else ""),
-                " : Turn %s extended file / folder info" % ("off" if self.info else "on")
+                " • Back to list",
+                " • Search fuzzy file name within '%s'" % tail,
+                " • Search within files in '%s'" % tail,
+                " • Create a new file within '%s'" % tail,
+                " • Create a new folder within '%s'" % tail,
+                " • Rename folder '%s'" % tail,
+                " • Move folder '%s'" % tail,
+                " • Copy folder '%s'" % tail,
+                " • Zip contents of '%s' (and optionally download)" % tail,
+                " • Chmod '%s'" % tail,
+                " • Chown '%s'" % tail,
+                " • Delete '%s' (must be empty)" % tail,
+                " • %s hidden files / folders" % ("Hide" if self.showHidden else "Show"),
+                " • Options - Selecting opens immediately%s" % (" [SELECTED]" if self.mode == "edit" else ""),
+                " • Options - Selecting shows maintenance menu%s" % (" [SELECTED]" if self.mode == "maintenance" else ""),
+                " • %s extended file / folder info" % ("Hide" if self.info else "Display")
             ]
             self.show_quick_panel(self.folderOptions, self.handleFolderOptions)
         elif selection == 2 or selected[-1] == "/":
@@ -178,18 +196,30 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 # Show the options
                 self.show_quick_panel(self.items, self.handleList)
         else:
-            if self.mode == "edit":
+            ext = selected.split(".")[-1]
+            if self.mode == "edit" and ext not in self.dontEdit:
                 if not self.downloadAndOpen(selected):
                     return self.errorMessage("Error downloading %s" % selected)
-            elif self.mode == "maintenance":
+            else:
                 # give options
                 # rename, chmod, chown, delete
+                downloadFolder = os.path.expandvars(
+                    self.getSettings().get(
+                        "download_folder",
+                        "%UserProfile%\\Downloads"
+                    )
+                )
                 items = [
-                    ["Edit %s" % selected, self.lastDir],
-                    ["Rename %s" % selected, self.lastDir],
-                    ["chmod %s" % selected, self.lastDir],
-                    ["chown %s" % selected, self.lastDir],
-                    ["Delete %s" % selected, self.lastDir]
+                    [" • Edit '%s'" % selected],
+                    [" • Rename '%s'" % selected],
+                    [" • Move '%s'" % selected],
+                    [" • Copy '%s'" % selected],
+                    [" • Save to %s" % downloadFolder],
+                    [" • Save to %s and open" % downloadFolder],
+                    [" • Zip '%s'" % selected],
+                    [" • chmod '%s'" % selected],
+                    [" • chown '%s'" % selected],
+                    [" • Delete '%s'" % selected]
                 ]
                 # Show the options
                 self.selected = selected
@@ -211,6 +241,53 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.showList
             )
         elif selection == 2:
+            #TODO
+            caption = "Move to: "
+            self.show_input_panel(
+                caption,
+                self.selected,
+                self.handleRename,
+                self.handleChange,
+                self.showList
+            )
+        elif selection == 3:
+            #TODO
+            caption = "Copy to: "
+            self.show_input_panel(
+                caption,
+                self.selected,
+                self.handleRename,
+                self.handleChange,
+                self.showList
+            )
+        elif selection == 4 or selection == 5:
+            # Save file to download folder
+            downloadFolder = os.path.expandvars(
+                self.getSettings().get(
+                    "download_folder",
+                    "%UserProfile%\\Downloads"
+                )
+            )
+            if not self.downloadFileTo(self.selected, downloadFolder):
+                return self.errorMessage("Error downloading %s" % self.selected)
+            if selection == 5:
+                # And open
+                f = os.path.join(
+                    downloadFolder,
+                    self.selected
+                )
+                os.startfile(f)
+        elif selection == 6:
+            #TODO
+            caption = "Zip: "
+            self.show_input_panel(
+                caption,
+                self.selected,
+                self.handleRename,
+                self.handleChange,
+                self.showList
+            )
+        elif selection == 7:
             caption = "chmod to: "
             perms = self.getPerms(self.selected)
             self.show_input_panel(
@@ -220,7 +297,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handleChange,
                 self.showList
             )
-        elif selection == 3:
+        elif selection == 8:
             caption = "chown to: "
             (user, group) = self.getUserAndGroup(self.selected)
             self.show_input_panel(
@@ -230,7 +307,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handleChange,
                 self.showList
             )
-        elif selection == 4:
+        elif selection == 9:
             if self.ok_cancel_dialog(
                 "Are you sure you want to delete %s" % self.selected,
                 "Delete"
@@ -247,15 +324,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         else:
             head = self.lastDir
             tail = self.selected
-        cmd = "mv %s %s" % (tail, fileName)
-        if not self.runCommand(cmd):
-            return self.commandError(cmd)
-        else:
-            # TODO: UPDATE LOCAL!!!!!!!!!!!!!!!!!
-            # PATHS WILL NOT BE CORRECT
-            if self.selected is -1:
-                self.lastDir = self.joinPath(head, fileName)
-            self.show_quick_panel(self.items, self.handleList)
+        if tail != fileName:
+            cmd = "mv %s %s" % (tail, fileName)
+            if not self.runCommand(cmd):
+                return self.commandError(cmd)
+            else:
+                # TODO: UPDATE LOCAL!!!!!!!!!!!!!!!!!
+                # PATHS WILL NOT BE CORRECT
+                if self.selected is -1:
+                    self.lastDir = self.joinPath(head, fileName)
+        self.show_quick_panel(self.items, self.handleList)
 
     def handleChmod(self, chmod):
         # TODO: VALIDATE CHMOD
@@ -341,6 +419,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.show_quick_panel(self.items, self.handleList)
 
     def handleFolderOptions(self, selection):
+        print(selection)
         if selection == -1:
             try:
                 self.pq["process"].terminate()
@@ -391,6 +470,45 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.showList
             )
         elif selection == 6:
+            # move
+            # TODO: Select new path with quick panel
+            caption = "Enter new name: "
+            self.selected = -1
+            (head, tail) = self.splitPath(self.lastDir)
+            self.show_input_panel(
+                caption,
+                tail,
+                self.handleRename,
+                self.handleChange,
+                self.showList
+            )
+        elif selection == 7:
+            # copy
+            # #TODO
+            caption = "Enter new name: "
+            self.selected = -1
+            (head, tail) = self.splitPath(self.lastDir)
+            self.show_input_panel(
+                caption,
+                tail,
+                self.handleRename,
+                self.handleChange,
+                self.showList
+            )
+        elif selection == 8:
+            # zip
+            # TODO
+            caption = "Enter new name: "
+            self.selected = -1
+            (head, tail) = self.splitPath(self.lastDir)
+            self.show_input_panel(
+                caption,
+                tail,
+                self.handleRename,
+                self.handleChange,
+                self.showList
+            )
+        elif selection == 9:
             # chmod
             self.selected = -1
             caption = "chmod to: "
@@ -402,7 +520,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handleChange,
                 self.showList
             )
-        elif selection == 7:
+        elif selection == 10:
             # chown
             self.selected = -1
             caption = "chown to: "
@@ -414,7 +532,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handleChange,
                 self.showList
             )
-        elif selection == 8:
+        elif selection == 11:
             # delete
             self.selected = -1
             (head, tail) = self.splitPath(self.lastDir)
@@ -424,15 +542,22 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             ):
                 # TODO: DELETE FILE
                 pass
-        elif selection == 9:
+        elif selection == 12:
+            # Show / hide hidden files
+            self.showHidden = self.showHidden is False
+            self.listDirectory(self.lastDir)
+            self.show_quick_panel(self.items, self.handleList)
+        elif selection == 13:
             # edit mode
             self.mode = "edit"
+            self.listDirectory(self.lastDir)
             self.show_quick_panel(self.items, self.handleList)
-        elif selection == 10:
+        elif selection == 14:
             # maintenance mode
             self.mode = "maintenance"
+            self.listDirectory(self.lastDir)
             self.show_quick_panel(self.items, self.handleList)
-        elif selection == 11:
+        elif selection == 15:
             # Turn on / off extended file / folder info
             self.info = self.info is False
             self.listDirectory(self.lastDir)
@@ -491,24 +616,23 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if self.info:
             (head, tail) = self.splitPath(self.lastDir)
             self.items.insert(0, [
-                " : Up a folder..",
+                ".. Up a folder",
                 "Up to %s" % head
             ])
             self.items.insert(0, [
-                " : Folder Actions / Settings",
+                " • Folder Actions / Settings [%s mode]" % self.mode.capitalize(),
                 "Manage folder %s or change preferences" % self.lastDir
             ])
             self.items.insert(0, ["%s:%s  " % (
-                self.getServerSetting("host"),
+                self.serverName,
                 self.lastDir
-            ), "%s mode" % self.mode.capitalize()])
+            ), self.getServerSetting("host")])
         else:
-            self.items.insert(0, " : Up a folder..")
-            self.items.insert(0, " : Folder Actions / Settings")
-            self.items.insert(0, "%s:%s - %s mode  " % (
-                self.getServerSetting("host"),
-                self.lastDir,
-                self.mode.capitalize()
+            self.items.insert(0, ".. Up a folder")
+            self.items.insert(0, " • Folder Actions / Settings [%s mode]" % self.mode.capitalize())
+            self.items.insert(0, "%s:%s" % (
+                self.serverName,
+                self.lastDir
             ))
 
     def makeLocalFolder(self):
@@ -573,6 +697,24 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.window.active_view().settings().set("reData", reData)
         return True
 
+    def downloadFileTo(self, f, destination):
+        destFile = os.path.join(
+            destination,
+            f
+        )
+        try:
+            cd = True
+            if self.pq["pwd"] == self.lastDir:
+                cd = False
+        except:
+            pass
+        if cd:
+            if not self.runCommand("cd %s" % self.lastDir):
+                return self.errorMessage("Error downloading %s" % f, True)
+        if not self.runCommand("get %s %s" % (f, destFile)):
+            return self.errorMessage("Error downloading %s" % f, True)
+        return True
+
     def connectionOpen(self):
         try:
             print("POLLING")
@@ -609,20 +751,22 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             try:
                 if self.info:
                     for row in self.catalog[d]:
-                        self.items.append(
-                            [
-                                row[0],
-                                "%s %s %s %s" % (
-                                    row[1],
-                                    row[2],
-                                    "" if row[1][0] == "d" else row[3],
-                                    row[4]
-                                )
-                            ]
-                        )
+                        if self.showHidden or (not self.showHidden and row[0][0] != "."):
+                            self.items.append(
+                                [
+                                    row[0],
+                                    "%s %s %s %s" % (
+                                        row[1],
+                                        row[2],
+                                        "" if row[1][0] == "d" else row[3],
+                                        row[4]
+                                    )
+                                ]
+                            )
                 else:
                     for row in self.catalog[d]:
-                        self.items.append(row[0])
+                        if self.showHidden or (not self.showHidden and row[0][0] != "."):
+                            self.items.append(row[0])
                 self.addOptionsToItems()
                 return True
             except:
@@ -655,15 +799,19 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             f = la[-1].strip()
             if f:
                 if la[0][0] == "d":
-                    if self.info:
-                        items.append([f + "/", "Folder"])
-                    else:
-                        items.append(f + "/")
+                    if self.showHidden or (not self.showHidden and f != "."):
+                        if self.info:
+                            #TODO: Add the extra required info here (as above)
+                            items.append([f + "/", "Folder"])
+                        else:
+                            items.append(f + "/")
                 else:
-                    if self.info:
-                        items.append([f, "File"])
-                    else:
-                        items.append(f)
+                    if self.showHidden or (not self.showHidden and f != "."):
+                        if self.info:
+                            #TODO: Add the extra required info here (as above)
+                            items.append([f, "File"])
+                        else:
+                            items.append(f)
         if len(items) >= 3:
             self.items = items[3:]
         self.addOptionsToItems()
@@ -1047,7 +1195,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def runCommand(self, cmd, checkReturn="psftp>"):
         if not self.connectionOpen():
             return False
-        # Run the  actual command
+        # Run the actual command
         if not self.sendCommand(cmd):
             return False
         (self.lastOut, self.lastErr) = self.readUntilReady(self.pq)
