@@ -211,7 +211,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 # Show the options
                 self.show_quick_panel(self.items, self.handleList)
         else:
-            self.maintainAndDownload(selected)
+            self.maintainOrDownload(selected)
 
     def maintainOrDownload(self, selected):
         ext = selected.split(".")[-1]
@@ -1096,9 +1096,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 for f in filter(bool, key.split("/")):
                     if f in self.dontCatalogFolders:
                         f_f_fresh = True
+                        continue
             elif not line:
                 if f_f_fresh:
-                    break
+                    continue
                 # Separator (between folder contents and next folder)
                 # Put our dict of folder contents onto the main array
                 tmpStruc = tmpStartStruc
@@ -1110,7 +1111,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     tmpStruc[o] = options[o]
             else:
                 if f_f_fresh:
-                    break
+                    continue
                 # These are our folder contents, add them to a dict until
                 # we hit a blank line which signifies the end of that list
                 # Break the line on whitespace
