@@ -74,6 +74,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # " : Turn %s extended file / folder info" % ("off" if self.info else "on")
         #
         # BOOKMARKS!
+        #
+        # sort out psftp and plink var names
+        #
+        # EXCLUDE PATTERS FROM CATALOG (.svn etc)
 
     def handleServerSelect(self, selection):
         if selection is -1:
@@ -367,33 +371,21 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def getUserAndGroup(self, fileName):
         user = None
         group = None
+        stats = self.getFileStats(self.joinPath(self.lastDir, fileName))
         try:
-            filesInFolder = self.catalog[self.lastDir]
-            for f in filesInFolder:
-                if f[0] == fileName:
-                    print(f)
-                    (user, group) = f[2].split(None, 1)
-                    break
-        except Exception as e:
-            print(e)
-        if not user or not group:
+            user = self.catalog["/"]["users"][stats[2]]
+            group = self.catalog["/"]["group"][stats[3]]
+        except:
             #TODO connect in to the server and get them
             pass
         return (user, group)
 
     def getPerms(self, fileName):
+        stats = self.getFileStats(self.joinPath(self.lastDir, fileName))
+        if stats:
+            return oct(stats[1])[2:5]
+        #TODO connect in to the server and get them
         permsStr = None
-        try:
-            filesInFolder = self.catalog[self.lastDir]
-            for f in filesInFolder:
-                if f[0] == fileName:
-                    permsStr = f[1]
-                    break
-        except Exception as e:
-            print(e)
-        if not permsStr:
-            #TODO connect in to the server and get them
-            pass
         perms = ""
         tmp = i = 0
         for p in permsStr[1:]:
@@ -404,6 +396,34 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 perms += str(tmp)
                 i = tmp = 0
         return perms
+
+    def getFileStats(self, filePath):
+        f = self.getFileFromCatalog(filePath)
+        if not f:
+            # Connect to server and get info
+            pass
+        return f["/"]
+
+    def getFileFromCatalog(self, filePath):
+        tmp = self.catalog
+        try:
+            for f in filter(bool, filePath.split("/")):
+                tmp = tmp[f]
+            return tmp
+        except:
+            return False
+
+    def appendFilesFromPath(self, fileDict, filePath):
+        for f in fileDict:
+            if f != "/":
+                if self.showHidden or (not self.showHidden and f[0] != "."):
+                    if fileDict[f]["/"][0] == 0:
+                        self.items.append([f, self.joinPath(filePath, f)])
+                    else:
+                        self.appendFilesFromPath(
+                            fileDict[f],
+                            self.joinPath(filePath, f)
+                        )
 
     def handleNavigate(self, path):
         prevDir = self.lastDir
@@ -431,7 +451,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.show_quick_panel(self.items, self.handleList)
         elif selection == 1:
             # Fuzzy file name from here
-            # TODO!
+            # TODO: ONLY SHOW THIS IF WE HAVE A CATALOGUE
+            self.items = []
+            self.appendFilesFromPath(
+                self.getFileFromCatalog(self.lastDir),
+                self.lastDir
+            )
             self.show_quick_panel(self.items, self.handleList)
         elif selection == 2:
             # Search within files from here
@@ -749,28 +774,36 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.items = []
             # Display options based on the catalog and self.lastDir
             try:
+                fldr = self.getFileFromCatalog(d)
                 if self.info:
-                    for row in self.catalog[d]:
-                        if self.showHidden or (not self.showHidden and row[0][0] != "."):
-                            self.items.append(
-                                [
-                                    row[0],
-                                    "%s %s %s %s" % (
-                                        row[1],
-                                        row[2],
-                                        "" if row[1][0] == "d" else row[3],
-                                        row[4]
-                                    )
-                                ]
-                            )
+                    for row in fldr:
+                        if row != "/":
+                            if self.showHidden or (not self.showHidden and row[0] != "."):
+                                self.items.append(
+                                    [
+                                        "%s%s" % (row, "/" if fldr[row]["/"][0] == 1 else ""),
+                                        "%s %s %s %s" % (
+                                            fldr[row]["/"][1],
+                                            fldr[row]["/"][2],
+                                            "" if fldr[row]["/"][0] == 1 else self.displaySize(fldr[row]["/"][4]),
+                                            self.displayTime(row[5])
+                                        )
+                                    ]
+                                )
                 else:
-                    for row in self.catalog[d]:
-                        if self.showHidden or (not self.showHidden and row[0][0] != "."):
-                            self.items.append(row[0])
+                    for row in fldr:
+                        if row != "/":
+                            if self.showHidden or (not self.showHidden and row[0] != "."):
+                                self.items.append(
+                                    "%s%s" % (
+                                        row,
+                                        "/" if fldr[row]["/"][0] == 1 else ""
+                                    )
+                                )
                 self.addOptionsToItems()
                 return True
-            except:
-                print("%s NOT IN CATALOG" % d)
+            except Exception as e:
+                print("%s NOT IN CATALOG: %s" % (d, e))
         if not self.connectionOpen():
             # error message
             return False
@@ -817,6 +850,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.addOptionsToItems()
         return True
 
+    def displayTime(self, uTime):
+        # TODO
+        return "UNIXTIME!!!!"
+
+    def displaySize(self, bytes):
+        # TODO
+        return "%s BYTES!!!!" % bytes
+
     def catalogServer(self):
         if not self.getServerSetting("cache_file_structure"):
             return
@@ -858,7 +899,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 print("DDD", self.lastOut, "EEE", self.lastErr, "FFF")
 
             # We should be at a prompt
-            send = "cd %s && ls -lahpR --time-style=long-iso > /tmp/%sSub.cat || cd /tmp && tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat && echo $((666 + 445));\n" % (
+            send = "cd %s && ls -lapR --time-style=long-iso > /tmp/%sSub.cat || cd /tmp && tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat && echo $((666 + 445));\n" % (
                 self.getServerSetting("remote_path"),
                 self.serverName,
                 self.serverName,
@@ -954,43 +995,18 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             except:
                 print("GZIP EXC")
                 return False
-            f = open(os.path.join(
+            catDataFile = os.path.join(
                 localFolder,
                 "%sSub.cat" % self.serverName
-            ), "r", encoding="utf-8")
-            struc = {}
-            startAt = self.getServerSetting("remote_path")
-            if startAt[-1] != "/":
-                startAt += "/"
-            for line in f:
-                line = line.strip()
-                if len(line) and line[-1] == ':':
-                    key = "%s%s" % (startAt, line[2:-1])
-                    if key[-1] != "/":
-                        key += "/"
-                    options = []
-                elif not line:
-                    struc[key] = options
-                else:
-                    sl = line.split()
-                    name = sl[-1]
-                    if len(sl) > 2 and name != "./" and name != "../":
-                        options.append([
-                            name,
-                            sl[0],
-                            "%s %s" % (sl[2], sl[3]),
-                            sl[4],
-                            "%s %s" % (sl[5], sl[6])
-                        ])
+            )
+            struc = self.createCatalog(
+                catDataFile,
+                self.getServerSetting("remote_path")
+            )
             # delete local files
-            f.close()
             os.remove(localFile)
-            os.remove(os.path.join(
-                localFolder,
-                "%sSub.cat" % self.serverName
-            ))
+            os.remove(catDataFile)
             # Save the python dict
-            # TODO: THIS IS A SHIT STRUCTURE. OPTIMISES PRECIOUSES!!!!!
             f = open(self.catalogFile, "wb")
             pickle.dump(struc, f)
             f.close()
@@ -998,6 +1014,168 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if not self.catalog or self.forceReloadCatalog:
             print("RELOAD!")
             self.catalog = pickle.load(open(self.catalogFile, "rb"))
+
+    def createCatalog(self, fileName, startAt):
+        # Build our catalog dictionary from one big recursive ls of the root
+        # folder. The structure will be something like:
+        #
+        # struc["/"]["server"] = server name
+        # struc["/"]["created"] = unixtime created
+        # struc["/"]["updated"] = unixtime updated
+        # struc["/"]["users"] = users dict int -> user name
+        # struc["/"]["groups"] = groups dict int -> group name
+        # struc["folder1"]["/"] = [list of stat info on folder 1]
+        # struc["folder1"]["folder2"]["/"] = [list of stat info on folder 2]
+        #
+        # Stat info is a list of data:
+        # [0] - 0 = file, 1 = folder, 2 = symlink to file, 3 = symlink to folder
+        # [1] - convert to octal for file perms
+        # [2] - key of user dict to convert this id to a string user name
+        # [3] - key of group dict to convert this id to a string group name
+        # [4] - filesize in bytes
+        # [5] - date as unixtime
+        # [6] - if symlink then note where it links to
+
+        # Build a lookup dict for quickly converting rwxrwxrwx to an integer
+        tmp = {}
+        tmp["---"] = 0
+        tmp["--x"] = 1
+        tmp["-w-"] = 2
+        tmp["-wx"] = 3
+        tmp["r--"] = 4
+        tmp["r-x"] = 5
+        tmp["rw-"] = 6
+        tmp["rwx"] = 7
+        permsLookup = {}
+        for x in tmp:
+            for y in tmp:
+                for z in tmp:
+                    permsLookup["%s%s%s" % (x, y, z)] = int("%s%s%s" % (
+                        tmp[x],
+                        tmp[y],
+                        tmp[z]
+                    ), 8)
+        struc = {}
+        tmpStruc = struc
+        tmpStartStruc = struc
+        for f in filter(bool, startAt.split('/')):
+            tmpStartStruc[f] = {}
+            tmpStartStruc = tmpStartStruc[f]
+        userDict = {}
+        groupDict = {}
+        uKey = 0
+        gKey = 0
+        catFile = open(fileName, "r", encoding="utf-8")
+        for line in catFile:
+            line = line.strip()
+            # If a folder is specified (ends in a colon)
+            if line and line[-1] == ':':
+                # All our folders begin "./"
+                key = line[2:-1]
+                options = {}
+                charsIn1 = 0
+                charsIn2 = 0
+            elif not line:
+                # Separator (between folder contents and next folder)
+                # Put our dict of folder contents onto the main array
+                tmpStruc = tmpStartStruc
+                for f in filter(bool, key.split('/')):
+                    if f not in tmpStruc:
+                        tmpStruc[f] = {}
+                    tmpStruc = tmpStruc[f]
+                for o in options:
+                    tmpStruc[o] = options[o]
+            else:
+                # These are our folder contents, add them to a dict until
+                # we hit a blank line which signifies the end of that list
+                # Break the line on whitespace
+                sl = line.split()
+                # File / folder name is always the last item in the list
+                name = sl[-1].rstrip("/")
+                cName = None
+                # As it may contain spaces we cheat to get the file name once we
+                # have hit our "." current directory. Try to make this fairly
+                # robust
+                if name == "." and len(options) is 0:
+                    charsIn1 = line.find("./")
+                # Verify that with the ".." up a dir
+                elif name == ".." and len(options) is 0:
+                    charsIn2 = line.find("../")
+                elif len(sl) < 5:
+                    # Skip the "Total BYTES" message
+                    pass
+                elif not charsIn1 or not charsIn2 or charsIn1 != charsIn2:
+                    print("ERROR PARSING LS OUTPUT on line: %s" % line)
+                else:
+                    cName = line[charsIn1:]
+                    if sl[0][0] == "l" and "->" in cName:
+                        (cName, symlinkDest) = cName.split(" -> ")
+                        if symlinkDest[0] != "/":
+                            symlinkDest = self.joinPath(self.joinPath(
+                                startAt,
+                                key),
+                                symlinkDest
+                            )
+                if len(sl) >= 7 and cName:
+                    cName = cName.rstrip("/")
+                    # If we have a full row of info and we're not a folder up (..)
+                    # or current folder reference then add to our dict
+                    if sl[0][0] == "l":
+                        t = 2
+                    elif sl[0][0] == "d":
+                        t = 1
+                    else:
+                        t = 0
+                    try:
+                        p = permsLookup[sl[0][1:10]]
+                    except:
+                        try:
+                            p = permsLookup[sl[0][1:10].replace("s", "x")]
+                        except:
+                            # TODO: Not sure what to do with this, this will
+                            # do for now
+                            print(
+                                "PERMS STRING CONTAINED SUID/GUID: %s"
+                                % sl[0][1:10]
+                            )
+                    try:
+                        u = userDict[sl[2]]
+                    except:
+                        userDict[sl[2]] = uKey
+                        u = uKey
+                        uKey += 1
+                    try:
+                        g = groupDict[sl[3]]
+                    except:
+                        groupDict[sl[3]] = gKey
+                        g = gKey
+                        gKey += 1
+                    s = int(sl[4])
+                    d = int(time.mktime(time.strptime(
+                        "%s %s" % (sl[5], sl[6]),
+                        "%Y-%m-%d %H:%M"
+                    )))
+                    stats = [t, p, u, g, s, d]
+                    # If we have a symlink
+                    if t is 2:
+                        stats.append(symlinkDest)
+                    options[cName] = {}
+                    options[cName]["/"] = stats
+        # Put our final dict of folder contents onto the main dict
+        tmpStruc = tmpStartStruc
+        for f in filter(bool, key.split('/')):
+            if f not in tmpStruc:
+                tmpStruc[f] = {}
+            tmpStruc = tmpStruc[f]
+        catFile.close()
+        # add user and group shizzle
+        struc["/"] = {}
+        struc["/"]["server"] = self.serverName
+        struc["/"]["created"] = int(time.time())
+        struc["/"]["updated"] = int(time.time())
+        struc["/"]["users"] = userDict
+        struc["/"]["groups"] = groupDict
+        return struc
 
     def getCommand(self, app):
         cmd = [
