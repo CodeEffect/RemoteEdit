@@ -796,11 +796,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                                 self.items.append(
                                     [
                                         "%s%s" % (row, "/" if fldr[row]["/"][0] == 1 else ""),
-                                        "%s %s %s %s" % (
-                                            fldr[row]["/"][1],
-                                            fldr[row]["/"][2],
+                                        "%s %s %s %s %s" % (
+                                            oct(fldr[row]["/"][1])[2:5],
+                                            self.catalog["/"]["users"][fldr[row]["/"][2]],
+                                            self.catalog["/"]["groups"][fldr[row]["/"][3]],
                                             "" if fldr[row]["/"][0] == 1 else self.displaySize(fldr[row]["/"][4]),
-                                            self.displayTime(row[5])
+                                            self.displayTime(fldr[row]["/"][5])
                                         )
                                     ]
                                 )
@@ -1077,10 +1078,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         for f in filter(bool, startAt.split('/')):
             tmpStartStruc[f] = {}
             tmpStartStruc = tmpStartStruc[f]
-        userDict = {}
-        groupDict = {}
-        uKey = 0
-        gKey = 0
+        userDict = []
+        groupDict = []
         f_f_fresh = False
         catFile = open(fileName, "r", encoding="utf-8")
         for line in catFile:
@@ -1164,18 +1163,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                                 "PERMS STRING CONTAINED SUID/GUID: %s"
                                 % sl[0][1:10]
                             )
-                    try:
-                        u = userDict[sl[2]]
-                    except:
-                        userDict[sl[2]] = uKey
-                        u = uKey
-                        uKey += 1
-                    try:
-                        g = groupDict[sl[3]]
-                    except:
-                        groupDict[sl[3]] = gKey
-                        g = gKey
-                        gKey += 1
+                    if sl[2] not in userDict:
+                        userDict.append(sl[2])
+                    u = userDict.index(sl[2])
+                    if sl[2] not in groupDict:
+                        groupDict.append(sl[3])
+                    g = groupDict.index(sl[3])
                     s = int(sl[4])
                     d = int(time.mktime(time.strptime(
                         "%s %s" % (sl[5], sl[6]),
