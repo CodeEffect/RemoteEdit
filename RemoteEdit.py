@@ -29,10 +29,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     mode = "edit"
     info = False
     showHidden = False
-    dontEdit = [
+    dontEditExt = [
         "zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
         "mp3", "wav", "bz", "pyc", "ico"
     ]
+    dontCatalogFolders = [".svn", ".git"]
 
     def run(self, action=None):
         # List servers
@@ -131,6 +132,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # Show the options
         self.show_quick_panel(self.items, self.handleList)
 
+    def handleFuzzy(self, selection):
+        if selection == -1:
+            try:
+                self.pq["process"].terminate()
+            except:
+                pass
+            return
+        (self.lastDir, selected) = self.splitPath(self.items[selection][1])
+        self.maintainOrDownload(selected)
+
     def handleList(self, selection):
         if self.info:
             selected = self.items[selection][0]
@@ -200,34 +211,37 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 # Show the options
                 self.show_quick_panel(self.items, self.handleList)
         else:
-            ext = selected.split(".")[-1]
-            if self.mode == "edit" and ext not in self.dontEdit:
-                if not self.downloadAndOpen(selected):
-                    return self.errorMessage("Error downloading %s" % selected)
-            else:
-                # give options
-                # rename, chmod, chown, delete
-                downloadFolder = os.path.expandvars(
-                    self.getSettings().get(
-                        "download_folder",
-                        "%UserProfile%\\Downloads"
-                    )
+            self.maintainAndDownload(selected)
+
+    def maintainOrDownload(self, selected):
+        ext = selected.split(".")[-1]
+        if self.mode == "edit" and ext not in self.dontEditExt:
+            if not self.downloadAndOpen(selected):
+                return self.errorMessage("Error downloading %s" % selected)
+        else:
+            # give options
+            # rename, chmod, chown, delete
+            downloadFolder = os.path.expandvars(
+                self.getSettings().get(
+                    "download_folder",
+                    "%UserProfile%\\Downloads"
                 )
-                items = [
-                    [" • Edit '%s'" % selected],
-                    [" • Rename '%s'" % selected],
-                    [" • Move '%s'" % selected],
-                    [" • Copy '%s'" % selected],
-                    [" • Save to %s" % downloadFolder],
-                    [" • Save to %s and open" % downloadFolder],
-                    [" • Zip '%s'" % selected],
-                    [" • chmod '%s'" % selected],
-                    [" • chown '%s'" % selected],
-                    [" • Delete '%s'" % selected]
-                ]
-                # Show the options
-                self.selected = selected
-                self.show_quick_panel(items, self.handleMaintenance)
+            )
+            items = [
+                [" • Edit '%s'" % selected],
+                [" • Rename '%s'" % selected],
+                [" • Move '%s'" % selected],
+                [" • Copy '%s'" % selected],
+                [" • Save to %s" % downloadFolder],
+                [" • Save to %s and open" % downloadFolder],
+                [" • Zip '%s'" % selected],
+                [" • chmod '%s'" % selected],
+                [" • chown '%s'" % selected],
+                [" • Delete '%s'" % selected]
+            ]
+            # Show the options
+            self.selected = selected
+            self.show_quick_panel(items, self.handleMaintenance)
 
     def handleMaintenance(self, selection):
         if selection == 0:
@@ -457,7 +471,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.getFileFromCatalog(self.lastDir),
                 self.lastDir
             )
-            self.show_quick_panel(self.items, self.handleList)
+            self.show_quick_panel(self.items, self.handleFuzzy)
         elif selection == 2:
             # Search within files from here
             # TODO!
@@ -864,6 +878,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if not self.getServerSetting("remote_path"):
             return
 
+        # TODO Coo this
+
         # First, see if we've already got a catalog and it's
         # recent (less than 1 day old)
         self.catalogFile = os.path.join(
@@ -1065,17 +1081,24 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         groupDict = {}
         uKey = 0
         gKey = 0
+        f_f_fresh = False
         catFile = open(fileName, "r", encoding="utf-8")
         for line in catFile:
             line = line.strip()
             # If a folder is specified (ends in a colon)
             if line and line[-1] == ':':
+                f_f_fresh = False
                 # All our folders begin "./"
                 key = line[2:-1]
                 options = {}
                 charsIn1 = 0
                 charsIn2 = 0
+                for f in filter(bool, key.split("/")):
+                    if f in self.dontCatalogFolders:
+                        f_f_fresh = True
             elif not line:
+                if f_f_fresh:
+                    break
                 # Separator (between folder contents and next folder)
                 # Put our dict of folder contents onto the main array
                 tmpStruc = tmpStartStruc
@@ -1086,6 +1109,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 for o in options:
                     tmpStruc[o] = options[o]
             else:
+                if f_f_fresh:
+                    break
                 # These are our folder contents, add them to a dict until
                 # we hit a blank line which signifies the end of that list
                 # Break the line on whitespace
