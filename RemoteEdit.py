@@ -29,11 +29,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     mode = "edit"
     info = False
     showHidden = False
-    dontEditExt = [
-        "zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
-        "mp3", "wav", "bz", "pyc", "ico"
-    ]
-    dontCatalogFolders = [".svn", ".git"]
+    dontEditExt = []
+    dontCatalogFolders = []
+    qc = {}
 
     def run(self, action=None):
         # List servers
@@ -61,8 +59,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         #
         # Search in files GREP IT!
         #
-        # FUZZY FILE OPEN?
-        #
         # order by filename, size, date
         # per server filename filters, add filters
         # filter by file size
@@ -78,7 +74,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         #
         # sort out psftp and plink var names
         #
-        # EXCLUDE PATTERS FROM CATALOG (.svn etc)
+        # TODO: Fix remote_path = "/" for "/" and "/var/"
 
     def handleServerSelect(self, selection):
         if selection is -1:
@@ -89,16 +85,39 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             sublime.error_message("TODO")
         if selection is 1:
             # User has requested to quick connect
-            # TODO QUICK CONNECT
-            sublime.error_message("TODO")
+            self.show_input_panel(
+                "Enter connection string (user@hostname:port/remote/path): ",
+                "",
+                self.handleQuickHost,
+                self.handleChange,
+                self.handleCancel
+            )
         else:
+            self.qc = {}
             self.startServer(self.items[selection - 2])
 
-    def startServer(self, serverName):
+    def startServer(self, serverName, quickConnect=False):
         try:
             self.forceReloadCatalog = bool(self.serverName != serverName)
             self.serverName = serverName
-            self.server = self.servers[self.serverName]
+            self.dontEditExt = self.getSettings().get(
+                "dont_edit_ext",
+                []
+            )
+            self.dontCatalogFolders = self.getSettings().get(
+                "dont_catalog_folders",
+                []
+            )
+            if not quickConnect:
+                self.server = self.servers[self.serverName]
+                self.dontEditExt = self.getServerSetting(
+                    "dont_edit_ext",
+                    self.dontEditExt
+                )
+                self.dontCatalogFolders = self.getServerSetting(
+                    "dont_catalog_folders",
+                    self.dontCatalogFolders
+                )
         except:
             self.errorMessage("ERROR! Server \"%s\" not found." % serverName)
         if False:
@@ -132,28 +151,61 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # Show the options
         self.show_quick_panel(self.items, self.handleList)
 
+    def handleQuickHost(self, connectionString):
+        if "/" in connectionString:
+            (connectionString, self.qc["remote_path"]) = connectionString.split("/", 1)
+            self.qc["remote_path"] = "/" + self.qc["remote_path"]
+        else:
+            self.qc["remote_path"] = "/"
+        if ":" in connectionString:
+            (connectionString, self.qc["port"]) = connectionString.split(":")
+        else:
+            self.qc["port"] = "22"
+        if "@" in connectionString:
+            (self.qc["user"], self.qc["host"]) = connectionString.split("@")
+        else:
+            self.qc["user"] = "root"
+            self.qc["host"] = connectionString
+
+        self.serverName = self.qc["host"]
+        self.show_input_panel(
+            "Enter password (blank to attempt pageant auth: ",
+            "",
+            self.handleQuickPassword,
+            self.handleChange,
+            self.handleCancel
+        )
+
+    def handleQuickPassword(self, password):
+        self.qc["password"] = password
+        self.startServer(self.serverName, True)
+
+    def closeApps(self):
+        try:
+            self.psftp["process"].terminate()
+        except:
+            pass
+        try:
+            self.plink["process"].terminate()
+        except:
+            pass
+
     def handleFuzzy(self, selection):
         if selection == -1:
-            try:
-                self.pq["process"].terminate()
-            except:
-                pass
+            self.closeApps()
             return
         (self.lastDir, selected) = self.splitPath(self.items[selection][1])
         self.maintainOrDownload(selected)
 
     def handleList(self, selection):
+        if selection == -1:
+            self.closeApps()
+            return
         if self.info:
             selected = self.items[selection][0]
         else:
             selected = self.items[selection]
-        if selection == -1:
-            try:
-                self.pq["process"].terminate()
-            except:
-                pass
-            return
-        elif selection == 0:
+        if selection == 0:
             # text of server / dir
             caption = "Navigate to: "
             self.show_input_panel(
@@ -168,8 +220,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             (head, tail) = self.splitPath(self.lastDir)
             self.folderOptions = [
                 " • Back to list",
-                " • Search fuzzy file name within '%s'" % tail,
-                " • Search within files in '%s'" % tail,
+                " • Fuzzy file name search in '%s'" % tail,
+                " • Search inside files in '%s'" % tail,
                 " • Create a new file within '%s'" % tail,
                 " • Create a new folder within '%s'" % tail,
                 " • Rename folder '%s'" % tail,
@@ -337,14 +389,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if self.selected is -1:
             (head, tail) = self.splitPath(self.lastDir)
             cmd = "cd %s" % head
-            if not self.runCommand(cmd):
+            if not self.runSftpCommand(cmd):
                 return self.commandError(cmd)
         else:
             head = self.lastDir
             tail = self.selected
         if tail != fileName:
             cmd = "mv %s %s" % (tail, fileName)
-            if not self.runCommand(cmd):
+            if not self.runSftpCommand(cmd):
                 return self.commandError(cmd)
             else:
                 # TODO: UPDATE LOCAL!!!!!!!!!!!!!!!!!
@@ -360,7 +412,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         else:
             fileName = self.selected
         cmd = "chmod %s %s" % (chmod, fileName)
-        if not self.runCommand(cmd):
+        if not self.runSftpCommand(cmd):
             return self.commandError(cmd)
         else:
             self.show_quick_panel(self.items, self.handleList)
@@ -374,7 +426,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # TODO: CHOWN DOESN'T RUN FROM SFTP!!!!
         # UPDATE LOCAL!!!!!!!!!!!!!
         cmd = "chown %s %s" % (chown, fileName)
-        if not self.runCommand(cmd):
+        if not self.runSftpCommand(cmd):
             return self.commandError(cmd)
         else:
             self.show_quick_panel(self.items, self.handleList)
@@ -455,10 +507,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def handleFolderOptions(self, selection):
         print(selection)
         if selection == -1:
-            try:
-                self.pq["process"].terminate()
-            except:
-                pass
+            self.closeApps()
             return
         elif selection == 0:
             # Back to prev list
@@ -625,25 +674,24 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if not folderName:
             self.show_quick_panel(self.folderOptions, self.handleFolderOptions)
         else:
-            if not self.connectionOpen():
-                # error message
+            if not self.sftpConnectionOpen():
                 return sublime.error_message(
                     "Error connecting to %s" % self.serverName
                 )
             # Create folder on server
-            if not self.sendCommand("mkdir %s" % folderName):
+            if not self.sendSftpCommand("mkdir %s" % folderName):
                 print("MKDIR FAIL")
                 return False
-            (self.lastOut, self.lastErr) = self.readUntilReady(self.pq)
+            (self.lastOut, self.lastErr) = self.readUntilReady(self.psftp)
             if "psftp>" not in self.lastOut:
                 print("MKDIR RET FAIL")
                 return False
             # remote cd to folder
             self.lastDir = self.joinPath(self.lastDir, folderName)
-            if not self.sendCommand("cd %s" % self.lastDir):
+            if not self.sendSftpCommand("cd %s" % self.lastDir):
                 print("CD FAIL")
                 return False
-            (self.lastOut, self.lastErr) = self.readUntilReady(self.pq)
+            (self.lastOut, self.lastErr) = self.readUntilReady(self.psftp)
             if "psftp>" not in self.lastOut:
                 print("CD RET FAIL")
                 return False
@@ -701,22 +749,22 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # error message
             self.lastErr = "Error creating local folder"
             return False
-        if not self.connectionOpen():
+        if not self.sftpConnectionOpen():
             # error message
             return False
         # cd
-        if self.pq["pwd"] != self.lastDir:
-            if not self.sendCommand("cd %s" % self.lastDir):
+        if self.psftp["pwd"] != self.lastDir:
+            if not self.sendSftpCommand("cd %s" % self.lastDir):
                 print("CD FAIL")
                 return False
-            (self.lastOut, self.lastErr) = self.readUntilReady(self.pq)
+            (self.lastOut, self.lastErr) = self.readUntilReady(self.psftp)
             if "psftp>" not in self.lastOut:
                 print("CD RET FAIL")
                 return False
-        if not self.sendCommand("get %s %s%s" % (f, localFolder, f)):
+        if not self.sendSftpCommand("get %s %s%s" % (f, localFolder, f)):
             print("GET FAIL")
             return False
-        (self.lastOut, self.lastErr) = self.readUntilReady(self.pq)
+        (self.lastOut, self.lastErr) = self.readUntilReady(self.psftp)
         if "psftp>" not in self.lastOut:
             print("GET RET FAIL")
             return False
@@ -743,41 +791,41 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         )
         try:
             cd = True
-            if self.pq["pwd"] == self.lastDir:
+            if self.psftp["pwd"] == self.lastDir:
                 cd = False
         except:
             pass
         if cd:
-            if not self.runCommand("cd %s" % self.lastDir):
+            if not self.runSftpCommand("cd %s" % self.lastDir):
                 return self.errorMessage("Error downloading %s" % f, True)
-        if not self.runCommand("get %s %s" % (f, destFile)):
+        if not self.runSftpCommand("get %s %s" % (f, destFile)):
             return self.errorMessage("Error downloading %s" % f, True)
         return True
 
-    def connectionOpen(self):
+    def sftpConnectionOpen(self):
         try:
             print("POLLING")
-            if self.pq["process"].poll() is None:
+            if self.psftp["process"].poll() is None:
                 print("POLLING OK")
                 return True
             else:
-                print("POLLING FAIL BUT pq PRESENT")
+                print("POLLING FAIL BUT psftp PRESENT")
         except:
             print("POLLING EXCEPTION, PROCESS DEAD")
         # need to reconnect
         cmd = self.getCommand("psftp.exe")
-        self.pq = self.getProcess(cmd)
+        self.psftp = self.getProcess(cmd)
         print("OPENING")
-        (self.lastOut, self.lastErr) = self.readUntilReady(self.pq)
+        (self.lastOut, self.lastErr) = self.readUntilReady(self.psftp)
         if "psftp>" not in self.lastOut:
             print("CONNECT FAILED: %s" % self.lastOut)
             return False
         return True
 
-    def sendCommand(self, cmd):
+    def sendSftpCommand(self, cmd):
         try:
             print("SENDING CMD: %s" % cmd)
-            self.pq["process"].stdin.write(bytes("%s\n" % cmd, "utf-8"))
+            self.psftp["process"].stdin.write(bytes("%s\n" % cmd, "utf-8"))
             return True
         except Exception as e:
             print("COMMAND FAILED: %s" % e)
@@ -790,54 +838,54 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             try:
                 fldr = self.getFileFromCatalog(d)
                 if self.info:
-                    for row in fldr:
-                        if row != "/":
-                            if self.showHidden or (not self.showHidden and row[0] != "."):
+                    for f in fldr:
+                        if f != "/":
+                            if self.showHidden or (not self.showHidden and f[0] != "."):
                                 self.items.append(
                                     [
-                                        "%s%s" % (row, "/" if fldr[row]["/"][0] == 1 else ""),
-                                        "%s %s %s %s %s" % (
-                                            oct(fldr[row]["/"][1])[2:5],
-                                            self.catalog["/"]["users"][fldr[row]["/"][2]],
-                                            self.catalog["/"]["groups"][fldr[row]["/"][3]],
-                                            "" if fldr[row]["/"][0] == 1 else self.displaySize(fldr[row]["/"][4]),
-                                            self.displayTime(fldr[row]["/"][5])
+                                        "%s%s" % (f, "/" if fldr[f]["/"][0] == 1 else ""),
+                                        "%s  %s %s %s %s" % (
+                                            oct(fldr[f]["/"][1])[2:5],
+                                            self.catalog["/"]["users"][fldr[f]["/"][2]],
+                                            self.catalog["/"]["groups"][fldr[f]["/"][3]],
+                                            "" if fldr[f]["/"][0] == 1 else " " + self.displaySize(fldr[f]["/"][4]) + " ",
+                                            self.displayTime(fldr[f]["/"][5])
                                         )
                                     ]
                                 )
                 else:
-                    for row in fldr:
-                        if row != "/":
-                            if self.showHidden or (not self.showHidden and row[0] != "."):
+                    for f in fldr:
+                        if f != "/":
+                            if self.showHidden or (not self.showHidden and f[0] != "."):
                                 self.items.append(
                                     "%s%s" % (
-                                        row,
-                                        "/" if fldr[row]["/"][0] == 1 else ""
+                                        f,
+                                        "/" if fldr[f]["/"][0] == 1 else ""
                                     )
                                 )
                 self.addOptionsToItems()
                 return True
             except Exception as e:
                 print("%s NOT IN CATALOG: %s" % (d, e))
-        if not self.connectionOpen():
+        if not self.sftpConnectionOpen():
             # error message
             return False
-        if not self.sendCommand("cd %s" % d):
+        if not self.sendSftpCommand("cd %s" % d):
             print("CD FAIL")
             return False
         print("CD SENT")
-        (self.lastOut, self.lastErr) = self.readUntilReady(self.pq)
+        (self.lastOut, self.lastErr) = self.readUntilReady(self.psftp)
         if "no such file or directory" in self.lastOut:
             return False
         print("AAA", self.lastOut, "BBB", self.lastErr, "CCC")
         if "psftp>" not in self.lastOut:
             return False
-        self.pq["pwd"] = d
-        if not self.sendCommand("ls"):
+        self.psftp["pwd"] = d
+        if not self.sendSftpCommand("ls"):
             print("LS FAIL")
             return False
         print("LS SENT")
-        (self.lastOut, self.lastErr) = self.readUntilReady(self.pq)
+        (self.lastOut, self.lastErr) = self.readUntilReady(self.psftp)
         print("DDD", self.lastOut, "EEE", self.lastErr, "FFF")
         # parse out
         # TODO: ADD THIS TO CATALOG!!!!!!!!!!!!
@@ -845,33 +893,43 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         for line in self.lastOut.split("\n"):
             la = line.split(" ")
             f = la[-1].strip()
-            if f:
+            if len(la) > 5 and f not in [".", ".."]:
+                # TODO: Only add d, - and f
                 if la[0][0] == "d":
-                    if self.showHidden or (not self.showHidden and f != "."):
+                    if self.showHidden or (not self.showHidden and f[0] != "."):
                         if self.info:
                             #TODO: Add the extra required info here (as above)
                             items.append([f + "/", "Folder"])
                         else:
                             items.append(f + "/")
                 else:
-                    if self.showHidden or (not self.showHidden and f != "."):
+                    if self.showHidden or (not self.showHidden and f[0] != "."):
                         if self.info:
                             #TODO: Add the extra required info here (as above)
                             items.append([f, "File"])
                         else:
                             items.append(f)
-        if len(items) >= 3:
-            self.items = items[3:]
+        self.items = items
         self.addOptionsToItems()
         return True
 
     def displayTime(self, uTime):
-        # TODO
-        return "UNIXTIME!!!!"
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(uTime))
 
     def displaySize(self, bytes):
-        # TODO
-        return "%s BYTES!!!!" % bytes
+        """Thanks to https://pypi.python.org/pypi/hurry.filesize/"""
+        traditional = [
+            (1024 ** 5, 'P'),
+            (1024 ** 4, 'T'),
+            (1024 ** 3, 'G'),
+            (1024 ** 2, 'M'),
+            (1024 ** 1, 'K'),
+            (1024 ** 0, 'B'),
+        ]
+        for factor, suffix in traditional:
+            if bytes >= factor:
+                break
+        return str(int(bytes/factor)) + suffix
 
     def catalogServer(self):
         if not self.getServerSetting("cache_file_structure"):
@@ -902,59 +960,60 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # background thread without worrying about known hosts
 
             cmd = self.getCommand("plink.exe")
-            pq = self.getProcess(cmd)
-            (self.lastOut, self.lastErr) = self.readUntilReady(pq)
-            if pq["process"].poll() is not None:
+            plink = self.getProcess(cmd)
+            (self.lastOut, self.lastErr) = self.readUntilReady(plink)
+            if plink["process"].poll() is not None:
                 print("Error connecting to server %s" % self.serverName)
                 print(self.lastErr)
                 return False
 
             if "host key is not cached in the registry" in self.lastErr:
                 send = "n\n"
-                pq["process"].stdin.write(bytes(send, "utf-8"))
-                (self.lastOut, self.lastErr) = self.readUntilReady(pq)
+                plink["process"].stdin.write(bytes(send, "utf-8"))
+                (self.lastOut, self.lastErr) = self.readUntilReady(plink)
                 print("DDD", self.lastOut, "EEE", self.lastErr, "FFF")
 
             # We should be at a prompt
-            send = "cd %s && ls -lapR --time-style=long-iso > /tmp/%sSub.cat || cd /tmp && tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat && echo $((666 + 445));\n" % (
+            send = "cd %s && ls -lapR --time-style=long-iso > /tmp/%sSub.cat 2>/dev/null; cd /tmp && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat && echo $((666 + 445));\n" % (
                 self.getServerSetting("remote_path"),
+                self.serverName,
                 self.serverName,
                 self.serverName,
                 self.serverName,
                 self.serverName
             )
-            pq["process"].stdin.write(bytes(send, "utf-8"))
-            (self.lastOut, self.lastErr) = self.readUntilReady(pq)
+            plink["process"].stdin.write(bytes(send, "utf-8"))
+            (self.lastOut, self.lastErr) = self.readUntilReady(plink)
             print("GGG", self.lastOut, "HHH", self.lastErr, "III")
             if not "1111" in self.lastOut:
                 # Try 1 more time as it pauses when running the command
                 # so we stop capturing
                 for i in range(10):
                     time.sleep(1)
-                    (self.lastOut, self.lastErr) = self.readUntilReady(pq)
+                    (self.lastOut, self.lastErr) = self.readUntilReady(plink)
                     if not "1111" in self.lastOut:
                         print("Not found! %s" % self.lastOut)
                     else:
                         print("JJJ", self.lastOut, "KKK", self.lastErr, "LLL")
                         break
             try:
-                pq["process"].terminate()
+                plink["process"].terminate()
             except:
                 pass
 
             # Now grab the file
             cmd = self.getCommand("psftp.exe")
-            pq = self.getProcess(cmd)
-            (self.lastOut, self.lastErr) = self.readUntilReady(pq)
+            psftp = self.getProcess(cmd)
+            (self.lastOut, self.lastErr) = self.readUntilReady(psftp)
             print("AAA", self.lastOut, "BBB", self.lastErr, "CCC")
             if "psftp>" not in self.lastOut:
                 return False
             try:
-                pq["process"].stdin.write(bytes("cd /tmp\n", "utf-8"))
+                psftp["process"].stdin.write(bytes("cd /tmp\n", "utf-8"))
             except Exception as e:
                 print("EXC: %s" % e)
                 return False
-            (self.lastOut, self.lastErr) = self.readUntilReady(pq)
+            (self.lastOut, self.lastErr) = self.readUntilReady(psftp)
             print("AAA", self.lastOut, "BBB", self.lastErr, "CCC")
             if "psftp>" not in self.lastOut:
                 return False
@@ -975,42 +1034,43 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 localFolder,
                 fileName
             )
+            print("get %s %s\n" % (fileName, localFile))
             try:
-                pq["process"].stdin.write(bytes("get %s %s\n" % (
+                psftp["process"].stdin.write(bytes("get %s %s\n" % (
                     fileName,
                     localFile
                 ), "utf-8"))
             except Exception as e:
                 print("EXC: %s" % e)
                 return False
-            (self.lastOut, self.lastErr) = self.readUntilReady(pq)
+            (self.lastOut, self.lastErr) = self.readUntilReady(psftp)
             print("AAA", self.lastOut, "BBB", self.lastErr, "CCC")
             if "psftp>" not in self.lastOut:
                 print("GET RET FAIL")
                 return False
             # delete tmp file from server
             try:
-                pq["process"].stdin.write(bytes("del %s\n" % (
+                psftp["process"].stdin.write(bytes("del %s\n" % (
                     fileName
                 ), "utf-8"))
             except Exception as e:
                 print("EXC DEL: %s" % e)
                 return False
-            (self.lastOut, self.lastErr) = self.readUntilReady(pq)
+            (self.lastOut, self.lastErr) = self.readUntilReady(psftp)
             if "psftp>" not in self.lastOut:
                 print("DEL RET FAIL")
                 return False
             # check local file exists
             try:
-                pq["process"].terminate()
+                psftp["process"].terminate()
             except:
                 pass
             try:
                 f = tarfile.open(localFile, "r:gz")
                 f.extractall(localFolder)
                 f.close()
-            except:
-                print("GZIP EXC")
+            except Exception as e:
+                print("GZIP EXC %s" % e)
                 return False
             catDataFile = os.path.join(
                 localFolder,
@@ -1081,7 +1141,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         userDict = []
         groupDict = []
         f_f_fresh = False
-        catFile = open(fileName, "r", encoding="utf-8")
+        catFile = open(fileName, "r", encoding="utf-8", errors="ignore")
         for line in catFile:
             line = line.strip()
             # If a folder is specified (ends in a colon)
@@ -1145,12 +1205,17 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     cName = cName.rstrip("/")
                     # If we have a full row of info and we're not a folder up (..)
                     # or current folder reference then add to our dict
-                    if sl[0][0] == "l":
-                        t = 2
-                    elif sl[0][0] == "d":
-                        t = 1
-                    else:
+                    tmpT = sl[0][0]
+                    if tmpT == "-":
                         t = 0
+                    elif tmpT == "d":
+                        t = 1
+                    elif tmpT == "l":
+                        t = 2
+                    elif tmpT in ["c", "b"]:
+                        continue
+                    else:
+                        print("UNKNOWN FILE TYPE: %s" % tmpT)
                     try:
                         p = permsLookup[sl[0][1:10]]
                     except:
@@ -1160,20 +1225,25 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                             # TODO: Not sure what to do with this, this will
                             # do for now
                             print(
-                                "PERMS STRING CONTAINED SUID/GUID: %s"
+                                "Couldn't parse perms string: %s. Skipping."
                                 % sl[0][1:10]
                             )
+                            continue
                     if sl[2] not in userDict:
                         userDict.append(sl[2])
                     u = userDict.index(sl[2])
-                    if sl[2] not in groupDict:
+                    if sl[3] not in groupDict:
                         groupDict.append(sl[3])
                     g = groupDict.index(sl[3])
                     s = int(sl[4])
-                    d = int(time.mktime(time.strptime(
-                        "%s %s" % (sl[5], sl[6]),
-                        "%Y-%m-%d %H:%M"
-                    )))
+                    try:
+                        d = int(time.mktime(time.strptime(
+                            "%s %s" % (sl[5], sl[6]),
+                            "%Y-%m-%d %H:%M"
+                        )))
+                    except:
+                        print("Error parseing date / time for line: %s" % line)
+                        continue
                     stats = [t, p, u, g, s, d]
                     # If we have a symlink
                     if t is 2:
@@ -1221,7 +1291,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             su.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             su.wShowWindow = subprocess.SW_HIDE
             kwargs['startupinfo'] = su
-
+        print(cmd)
         pq = {}
         pq["process"] = subprocess.Popen(
             cmd,
@@ -1292,10 +1362,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         return self.binPath
 
     def getServerSetting(self, key, default=None):
-        try:
-            val = self.server["settings"][key]
-        except:
-            val = default
+        if self.qc:
+            try:
+                val = self.qc[key]
+            except:
+                val = default
+        else:
+            try:
+                val = self.server["settings"][key]
+            except:
+                val = default
         return val
 
     def removeComments(self, text):
@@ -1385,17 +1461,19 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def joinPath(self, path, folder):
         if path[-1] is not "/":
             path = path + "/"
-        if folder[-1] is not "/":
+        if not folder:
+            print(path, folder)
+        elif folder[-1] is not "/":
             folder = folder + "/"
         return "%s%s" % (path, folder)
 
-    def runCommand(self, cmd, checkReturn="psftp>"):
-        if not self.connectionOpen():
+    def runSftpCommand(self, cmd, checkReturn="psftp>"):
+        if not self.sftpConnectionOpen():
             return False
         # Run the actual command
-        if not self.sendCommand(cmd):
+        if not self.sendSftpCommand(cmd):
             return False
-        (self.lastOut, self.lastErr) = self.readUntilReady(self.pq)
+        (self.lastOut, self.lastErr) = self.readUntilReady(self.psftp)
         if checkReturn not in self.lastOut:
             return False
         return True

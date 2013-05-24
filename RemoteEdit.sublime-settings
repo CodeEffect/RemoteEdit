@@ -1,4 +1,9 @@
 {
 	"download_folder": "%UserProfile%\\Downloads",
-	"catalog_stale_after_hours": 24
+	"catalog_stale_after_hours": 24,
+	"dont_edit_ext": [
+        "zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
+        "mp3", "wav", "bz", "pyc", "ico"
+    ],
+    "dont_catalog_folders": [".svn", ".git"]
 }
