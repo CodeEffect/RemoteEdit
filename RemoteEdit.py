@@ -21,43 +21,59 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     binPath = None
     settings = None
     settingFile = "RemoteEdit.sublime-settings"
-    catalogFile = False
-    catalog = None
-    forceReloadCatalog = True
+    catFile = False
+    cat = None
+    forceReloadCat = True
     lastDir = None
     mode = "edit"
     info = False
     showHidden = False
     dontEditExt = []
-    dontCatalogFolders = []
+    catExcludeFolders = []
     psftp = False
     plink = False
     bgCat = False
     permsLookup = None
     lsParams = "-lap --time-style=long-iso --color=never"
 
-    def run(self, save=None, catalog=None):
-        if catalog:
-            self.catalog_server(catalog)
-        elif save:
+    # Add links to find command results
+    # Make sure temp name is unique
+    # ESCAPING ESCAPING ESCAPING
+    #
+    # order by filename, size, date
+    # per server filename filters, add filters
+    # filter by file size
+    # filter by date modified
+    #
+    # Per server config settings:
+    # show / hide hidden files
+    # " : File options - Selecting opens immediately%s" % (" [SELECTED]" if self.mode == "edit" else ""),
+    # " : File options - Selecting shows maintenance menu%s" % (" [SELECTED]" if self.mode == "maintenance" else ""),
+    # " : Turn %s extended file / folder info" % ("off" if self.info else "on")
+    #
+    # BOOKMARKS!
+    #
+    # TODO: Move catalogue into coo. test against mic
+
+    def run(self, save=None):
+        # Ensure that the self.servers dict is populated
+        servers = self.load_server_list()
+        if save:
+            # Save called from external RE events handler class
             self.save(save)
         elif self.serverName:
-            # Ensure that the self.servers dict is populated
-            self.load_server_list()
             # Fire up the self.serverName server
             self.start_server(self.serverName)
         else:
-            # List servers
-            self.items = self.load_server_list()
-            items = []
-            for name in self.servers:
-                items.append([
-                    "%s (%s)" % (name, self.servers[name]["settings"]["host"]),
-                    "User: %s, Path: %s" % (
-                        self.servers[name]["settings"]["user"],
-                        self.servers[name]["settings"]["remote_path"]
-                    )
-                ])
+            # List servers and startup options
+            self.items = servers
+            items = [[
+                "%s (%s)" % (name, self.servers[name]["settings"]["host"]),
+                "User: %s, Path: %s" % (
+                    self.servers[name]["settings"]["user"],
+                    self.servers[name]["settings"]["remote_path"]
+                )
+            ] for name in self.servers]
             items.insert(0, [
                 " • Quick connect",
                 "Just enter a host and a username / password"
@@ -68,82 +84,86 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             ])
             self.show_quick_panel(items, self.handle_server_select)
 
-        # TODO: add onclose delete temp file
-        #
-        # Add links to find command results
-        # Make sure temp name is unique
-        # Change default to NOT catalog
-        # ESCAPING ESCAPING ESCAPING
-        #
-        # order by filename, size, date
-        # per server filename filters, add filters
-        # filter by file size
-        # filter by date modified
-        #
-        # Per server config settings:
-        # show / hide hidden files
-        # " : File options - Selecting opens immediately%s" % (" [SELECTED]" if self.mode == "edit" else ""),
-        # " : File options - Selecting shows maintenance menu%s" % (" [SELECTED]" if self.mode == "maintenance" else ""),
-        # " : Turn %s extended file / folder info" % ("off" if self.info else "on")
-        #
-        # BOOKMARKS!
-        #
-        # sort out psftp and plink var names
-        #
-        # TODO: Move catalog into coo, add new server. test against mic
-
     def save(self, id):
-        # TODO! ALL FAILS SHOULD MARK VIEW AS DIRTY
+        # Do some basic sanity checks on our data
         if not id:
-            return self.error_message("Save called without id")
-        # TODO: set a lock to ensure that we're the only thread running the save
-        # set a status bar in progress symbol
-        #
+            return self.error_message("Save called without specifying view")
         # First get the view with the passed id so we can grab data
         for v in self.window.views():
             if v.id() == id:
                 break
         else:
-            return self.error_message("View %s not found to save" % id)
-        # Check our file is within the temp folder
-        tempFolder = os.path.expandvars("%temp%")
+            return self.error_message("View %s not found" % id)
+        # Check our file is within the temp editing folder
+        tempFolder = self.get_local_tmp_path(False)
         localFile = v.file_name()
         if tempFolder not in localFile:
-            return self.error_message("View %s not in temp path" % id)
-        # initiate the save
+            return self.error_message(
+                "View %s has incorrect path %s" % (id, localFile)
+            )
+        # Validate our stored RE data
         reData = v.settings().get("reData", None)
         if not reData:
             return self.error_message("View data not available for %s" % id)
+        # Set a lock to ensure that we're the only thread running the save
+        lockFile = localFile + ".lock"
+        # Acquire lock
+        if not self.acquire_lock(lockFile):
+            # Could not obtain lock
+            # TODO: Check the age of the folder / lock
+            print("File is being saved already")
+            return
+        # TODO: Set a status bar in progress symbol
         remoteFile = self.join_path(
             reData["path"],
             reData["fileName"]
         )
         serverName = reData["serverName"]
-        cmd = "put %s %s" % (
-            localFile,
-            remoteFile
-        )
         if self.serverName != serverName:
             try:
                 self.close_apps()
                 self.server = self.servers[serverName]
             except:
-                print(serverName, self.servers)
+                self.release_lock(lockFile)
                 return self.error_message(
-                    "Unable to find details for server %s" % serverName
+                    "Missing connection details for server \"%s\"" % serverName
                 )
+        # Initiate the save
+        cmd = "put %s %s" % (
+            localFile,
+            remoteFile
+        )
         self.psftp = self.run_sftp_command(self.psftp, cmd)
         if not self.sftpResult:
+            # TODO! ALL FAILS SHOULD MARK VIEW AS DIRTY
+            self.release_lock(lockFile)
             return self.command_error(cmd)
-        (path, fileName) = self.split_path(remoteFile)
         # if succeeded then display ok
         if "permission denied" in self.lastOut:
+            # TODO! ALL FAILS SHOULD MARK VIEW AS DIRTY
+            self.release_lock(lockFile)
             return self.error_message(
                 "Permission denied when attempting to write file to %s" % serverName
             )
+        (path, fileName) = self.split_path(remoteFile)
         reData["remote_save"] = time.time()
         v.settings().set("reData", reData)
         sublime.message_dialog("File %s saved successfully" % fileName)
+        self.release_lock(lockFile)
+
+    def acquire_lock(self, path):
+        try:
+            os.mkdir(path)
+            return True
+        except:
+            return False
+
+    def release_lock(self, path):
+        try:
+            os.rmdir(path)
+        except:
+            pass
+        return True
 
     def handle_server_select(self, selection):
         if selection is -1:
@@ -188,16 +208,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         try:
             if self.serverName != serverName:
                 self.serverName = serverName
-                self.forceReloadCatalog = True
+                self.forceReloadCat = True
                 self.lastDir = self.get_server_setting("remote_path", None)
             else:
-                self.forceReloadCatalog = False
+                self.forceReloadCat = False
             self.dontEditExt = self.get_settings().get(
                 "dont_edit_ext",
                 []
             )
-            self.dontCatalogFolders = self.get_settings().get(
-                "dont_catalog_folders",
+            self.catExcludeFolders = self.get_settings().get(
+                "cat_exclude_folders",
                 []
             )
             if not quickConnect:
@@ -206,9 +226,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     "dont_edit_ext",
                     self.dontEditExt
                 )
-                self.dontCatalogFolders = self.get_server_setting(
-                    "dont_catalog_folders",
-                    self.dontCatalogFolders
+                self.catExcludeFolders = self.get_server_setting(
+                    "cat_exclude_folders",
+                    self.catExcludeFolders
                 )
         except:
             self.serverName = None
@@ -218,7 +238,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # K, fire up a thread to pull down an ls and process it
         # meanwhile open a connection to the server and present the user with a
         # filelist etc
-        self.check_catalog_server()
+        self.check_cat()
 
         # list files
         self.open_server()
@@ -245,25 +265,26 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # Show the options
         self.show_quick_panel(self.items, self.handle_list)
 
-    def handle_quick_host(self, connectionString):
+    def handle_quick_host(self, cs):
         self.server = {}
         self.server["settings"] = {}
-        if "/" in connectionString:
-            (connectionString, self.server["settings"]["remote_path"]) = connectionString.split("/", 1)
-            self.server["settings"]["remote_path"] = "/" + self.server["settings"]["remote_path"]
+        ss = self.server["settings"]
+        if "/" in cs:
+            (cs, ss["remote_path"]) = cs.split("/", 1)
+            ss["remote_path"] = "/" + ss["remote_path"]
         else:
-            self.server["settings"]["remote_path"] = "/"
-        if ":" in connectionString:
-            (connectionString, self.server["settings"]["port"]) = connectionString.split(":")
+            ss["remote_path"] = "/"
+        if ":" in cs:
+            (cs, ss["port"]) = cs.split(":")
         else:
-            self.server["settings"]["port"] = "22"
-        if "@" in connectionString:
-            (self.server["settings"]["user"], self.server["settings"]["host"]) = connectionString.split("@")
+            ss["port"] = "22"
+        if "@" in cs:
+            (ss["user"], ss["host"]) = cs.split("@")
         else:
-            self.server["settings"]["user"] = "root"
-            self.server["settings"]["host"] = connectionString
+            ss["user"] = "root"
+            ss["host"] = cs
 
-        self.serverName = self.server["settings"]["host"]
+        self.serverName = ss["host"]
         self.show_input_panel(
             "Enter password (blank to attempt pageant auth: ",
             "",
@@ -294,9 +315,17 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.maintain_or_download(selected)
 
     def handle_grep(self, search):
-        print(search)
+        # print(search)
         if not search:
             return self.show_quick_panel(self.items, self.handle_list)
+        # TODO: Better random FN, hash a view?
+        # Check unused? Check TMP PATH?
+        tmpFileName = "RemoteEdit_%s_grep" % time.time()
+        remotePath = "/tmp/%s" % tmpFileName
+        localPath = os.path.join(
+            self.get_local_tmp_path(),
+            tmpFileName
+        )
         wCmd = self.get_command("plink.exe")
         self.plink = self.get_process(wCmd)
         self.await_response(self.plink)
@@ -305,18 +334,34 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             return False
         # We should be at a prompt
         exclude = ""
-        if self.dontCatalogFolders:
-            for f in self.dontCatalogFolders:
+        if self.catExcludeFolders:
+            for f in self.catExcludeFolders:
                 exclude += "--exclude-dir=\"%s\" " % f
-        cmd = "cd %s && grep -i %s-nR -A2 -B2 \"%s\" .; echo %s;" % (
+        # TODO: Consider gzipping these as per the ls
+        cmd = "cd %s && grep -i %s-nR -A2 -B2 \"%s\" . > %s 2>/dev/null; echo %s;" % (
             self.lastDir,
             exclude,
             search,
+            remotePath,
             "\"GREPPING\" $((66666 + 44445)) \"GREPGREPGREPGREPGREPALOT\""
         )
         checkReturn = "111111"
-        if not self.run_ssh_command(self.plink, cmd, checkReturn):
+        if not self.run_ssh_command(self.plink, cmd, checkReturn, 2):
             return self.command_error(cmd)
+        # Download results
+        cmd = "get %s %s" % (
+            remotePath,
+            localPath
+        )
+        if not self.run_sftp_command(self.psftp, cmd):
+            return self.command_error(cmd)
+        try:
+            lf = open(localPath, "r", encoding="utf-8", errors="ignore")
+            results = lf.read()
+            lf.close()
+        except:
+            # TODO, return here && error msg
+            results = ""
         # Parse the results
         i = 0
         matches = 0
@@ -329,7 +374,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         ))
         aroundLine = re.compile("\.\/(.+)-([0-9]+)-(.*)")
         resultLine = re.compile("\.\/(.+):([0-9]+):(.*)")
-        for line in self.lastOut.split("\n"):
+        for line in results.split("\n"):
             i += 1
             if i is 1:
                 # First line is our search command
@@ -373,6 +418,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             "" if len(files) is 1 else "s"
         ))
         # Open a new tab
+        # TODO: Make this pass the filename instead of the text
         self.window.run_command(
             "remote_edit_display_search",
             {
@@ -380,6 +426,15 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "serverName": self.serverName
             }
         )
+        # Now delete remote and local files
+        cmd = "del \"%s\"" % (
+            remotePath
+        )
+        self.run_sftp_command(self.psftp, cmd)
+        try:
+            os.remove(localPath)
+        except:
+            pass
 
     def handle_list(self, selection):
         if selection == -1:
@@ -447,7 +502,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             else:
                 # Show the options
                 self.show_quick_panel(self.items, self.handle_list)
-                self.check_catalog_server()
+                self.check_cat()
         else:
             self.maintain_or_download(selected)
 
@@ -629,8 +684,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         group = None
         stats = self.get_file_stats(self.join_path(self.lastDir, fileName))
         try:
-            user = self.catalog["/"]["users"][stats[2]]
-            group = self.catalog["/"]["group"][stats[3]]
+            user = self.cat["/"]["users"][stats[2]]
+            group = self.cat["/"]["group"][stats[3]]
         except:
             #TODO connect in to the server and get them
             pass
@@ -654,14 +709,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         return perms
 
     def get_file_stats(self, filePath):
-        f = self.get_file_from_catalog(filePath)
+        f = self.get_file_from_cat(filePath)
         if not f:
             # Connect to server and get info
             pass
         return f["/"]
 
-    def get_file_from_catalog(self, filePath):
-        tmp = self.catalog
+    def get_file_from_cat(self, filePath):
+        tmp = self.cat
         try:
             for f in filter(bool, filePath.split("/")):
                 tmp = tmp[f]
@@ -671,15 +726,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def append_files_from_path(self, fileDict, filePath):
         for f in fileDict:
-            if f != "/":
-                if self.showHidden or (not self.showHidden and f[0] != "."):
-                    if fileDict[f]["/"][0] == 0:
-                        self.items.append([f, self.join_path(filePath, f)])
-                    else:
-                        self.append_files_from_path(
-                            fileDict[f],
-                            self.join_path(filePath, f)
-                        )
+            if f != "/" and (self.showHidden or (not self.showHidden and f[0] != ".")):
+                if fileDict[f]["/"][0] == 0:
+                    self.items.append([f, self.join_path(filePath, f)])
+                else:
+                    self.append_files_from_path(
+                        fileDict[f],
+                        self.join_path(filePath, f)
+                    )
 
     def handle_navigate(self, path):
         prevDir = self.lastDir
@@ -707,7 +761,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # TODO: ONLY SHOW THIS IF WE HAVE A CATALOGUE
             self.items = []
             self.append_files_from_path(
-                self.get_file_from_catalog(self.lastDir),
+                self.get_file_from_cat(self.lastDir),
                 self.lastDir
             )
             self.show_quick_panel(self.items, self.handle_fuzzy)
@@ -911,13 +965,22 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.lastDir
             ))
 
+    def get_local_tmp_path(self, includeServer=True):
+        # TODO: Make this not clash!!!
+        if includeServer:
+            return os.path.join(
+                os.path.expandvars("%temp%"),
+                "RemoteEdit",
+                self.serverName
+            )
+        return os.path.join(
+            os.path.expandvars("%temp%"),
+            "RemoteEdit"
+        )
+
     def make_local_folder(self):
         # file selected, ensure local folder is available
-        localFolder = os.path.join(
-            os.path.expandvars("%temp%"),
-            "RemoteEdit",
-            self.serverName
-        )
+        localFolder = self.get_local_tmp_path()
         for f in self.lastDir.split("/"):
             if f:
                 localFolder = os.path.join(
@@ -979,10 +1042,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def list_directory(self, d):
         self.items = []
-        if self.catalog:
-            # Display options based on the catalog and self.lastDir
+        if self.cat:
+            # Display options based on the catalogue and self.lastDir
             try:
-                fldr = self.get_file_from_catalog(d)
+                fldr = self.get_file_from_cat(d)
                 # print(d)
                 if self.info:
                     for f in filter(bool, fldr):
@@ -993,8 +1056,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                                     "%s%s" % (f, "/" if fldr[f]["/"][0] == 1 else ""),
                                     "%s  %s %s %s %s" % (
                                         oct(fldr[f]["/"][1])[2:5],
-                                        self.catalog["/"]["users"][fldr[f]["/"][2]],
-                                        self.catalog["/"]["groups"][fldr[f]["/"][3]],
+                                        self.cat["/"]["users"][fldr[f]["/"][2]],
+                                        self.cat["/"]["groups"][fldr[f]["/"][3]],
                                         "" if fldr[f]["/"][0] == 1 else " " + self.display_size(fldr[f]["/"][4]) + " ",
                                         self.display_time(fldr[f]["/"][5])
                                     )
@@ -1012,16 +1075,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                             )
             except Exception as e:
                 self.items = []
-                print("%s NOT IN CATALOG: %s" % (d, e))
+                print("%s NOT IN CATALOGUE: %s" % (d, e))
         if not self.items:
             cmd = "ls %s %s" % (self.lsParams, d)
             self.plink = self.run_ssh_command(self.plink, cmd)
             if not self.plink:
                 return self.command_error(cmd)
-            # Parse th ls and add to the catalog (but don't save)
-            if self.catalog:
-                self.catalog = self.parse_ls(
-                    self.catalog,
+            # Parse th ls and add to the catalogue (but don't save)
+            if self.cat:
+                self.cat = self.parse_ls(
+                    self.cat,
                     "./:\n%s" % (self.lastOut),
                     self.lastDir
                 )
@@ -1069,76 +1132,80 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 break
         return str(int(bytes/factor)) + suffix
 
-    def check_catalog_server(self):
+    def check_cat(self):
         # If it's already set and we don't need to reload then BFN.
-        if self.catalog and not self.forceReloadCatalog:
+        if self.cat and not self.forceReloadCat:
             return
         # If it's disabled then ta-ra!.
-        if not self.get_server_setting("enable_catalog"):
+        if not self.get_server_setting("enable_cat"):
             return
-        # If we don't have a catalog path then see you next tuesday.
-        if not self.get_server_setting("catalog_path"):
+        # If we don't have a catalogue path then see you next tuesday.
+        if not self.get_server_setting("cat_path"):
             return
-        # First, see if we've already got a catalog
-        catalogPath = os.path.join(
+        # First see if we're already cataloguing
+        self.bgCat = time.time()
+
+        # First, see if we've already got a catalogue
+        catPath = os.path.join(
             sublime.packages_path(),
             "User",
             "RemoteEdit",
-            "Catalogs"
+            "Cats"
         )
-        self.catalogFile = os.path.join(
-            catalogPath,
-            "%s.catalog" % self.serverName
+        self.catFile = os.path.join(
+            catPath,
+            "%s.cat" % self.serverName
         )
-        if not os.path.exists(catalogPath):
+        if not os.path.exists(catPath):
             try:
-                os.makedirs(catalogPath)
+                os.makedirs(catPath)
             except:
                 pass
         try:
-            mTime = os.path.getmtime(self.catalogFile)
-            stale = self.get_settings().get("catalog_stale_after_hours", 24) * 3600
+            mTime = os.path.getmtime(self.catFile)
+            stale = self.get_settings().get("cat_stale_after_hours", 24) * 3600
         except:
             mTime = stale = 0
         # And it's recent (less than 1 day old)
         if mTime + stale < time.time():
             # needs a refresh
             try:
-                os.remove(self.catalogFile)
+                os.remove(self.catFile)
             except:
                 pass
             # Use the below flag to indicate we will be cataloguing in the BG
             self.bgCat = time.time()
             # AWAKEN THE CAT DEMON!
-            cat = threading.Thread(target=catalog_server, args=(self.serverName, self.serverName))
+            cat = threading.Thread(
+                target=self.cat_server, args=(
+                    self.serverName,
+                    self.serverName
+                )
+            )
             cat.daemon = True
             cat.start()
-        elif os.path.exists(self.catalogFile):
-            self.catalog = pickle.load(open(self.catalogFile, "rb"))
+        elif os.path.exists(self.catFile):
+            self.cat = pickle.load(open(self.catFile, "rb"))
             print("I've reloaded!")
-            self.forceReloadCatalog = False
+            self.forceReloadCat = False
         else:
             # check bgCat for X minx in past, if too long then trigger the
             # download again
             pass
 
-    def catalog_server(self, serverName):
+    def cat_server(self, serverName, threadingSendsLotsOfArgsUnlessUHave2):
         # todo, set a flag for known hosts after first connect
         # if the flag is set we can punt the plink query straight into the
         # background thread without worrying about known hosts
         self.serverName = serverName
-        self.catalogFile = os.path.join(
+        self.catFile = os.path.join(
             sublime.packages_path(),
             "User",
             "RemoteEdit",
-            "Catalogs",
-            "%s.catalog" % self.serverName
+            "Cats",
+            "%s.cat" % self.serverName
         )
-        localFolder = os.path.join(
-            os.path.expandvars("%temp%"),
-            "RemoteEdit",
-            self.serverName
-        )
+        localFolder = self.get_local_tmp_path()
         try:
             os.makedirs(localFolder)
         except FileExistsError:
@@ -1162,7 +1229,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
         # We should be at a prompt
         send = "cd %s && ls %s -R > /tmp/%sSub.cat 2>/dev/null; cd /tmp && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat && echo $((666 + 445));\n" % (
-            self.get_server_setting("catalog_path"),
+            self.get_server_setting("cat_path"),
             self.lsParams,
             self.serverName,
             self.serverName,
@@ -1225,21 +1292,21 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             localFolder,
             "%sSub.cat" % self.serverName
         )
-        struc = self.create_catalog(
+        struc = self.create_cat(
             catDataFile,
-            self.get_server_setting("catalog_path")
+            self.get_server_setting("cat_path")
         )
         # delete local files
         os.remove(localFile)
         os.remove(catDataFile)
         # Save the python dict
-        f = open(self.catalogFile, "wb")
+        f = open(self.catFile, "wb")
         pickle.dump(struc, f)
         f.close()
-        print("CATALOG'D")
+        print("CATALOGUE'D")
 
-    def create_catalog(self, fileName, startAt):
-        # Build our catalog dictionary from one big recursive ls of the root
+    def create_cat(self, fileName, startAt):
+        # Build our catalogue dictionary from one big recursive ls of the root
         # folder. The structure will be something like:
         #
         # struc["/"]["server"] = server name
@@ -1311,7 +1378,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     key = "/"
                 else:
                     for f in filter(bool, key.split("/")):
-                        if f in self.dontCatalogFolders:
+                        if f in self.catExcludeFolders:
                             f_f_fresh = True
                             continue
             elif not line:
@@ -1556,8 +1623,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             except:
                 pass
         for root, dirs, files in os.walk(serverConfigPath):
-            for filename in fnmatch.filter(files, "*.server"):
-                serverName = filename[0:-7]
+            for filename in fnmatch.filter(files, "*"):
+                serverName = filename[0:filename.rfind(".")]
                 serverList.append(serverName)
                 self.servers[serverName] = {}
                 self.servers[serverName]["path"] = os.path.join(root, filename)
@@ -1609,16 +1676,23 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             folder = folder + "/"
         return "%s%s" % (path, folder)
 
-    def run_ssh_command(self, ssh, cmd=None, checkReturn="$"):
+    def run_ssh_command(self, ssh, cmd=None, checkReturn="$", awaitResponse=1):
         ssh = self.connection(ssh, "plink.exe", checkReturn)
         if not ssh:
             return False
         # If Run the actual command
         if cmd and not self.send_command(ssh, cmd):
             return False
-        self.await_response(ssh)
+        buf = ""
+        # If not found then try again. TODO: NEED TIMEOUT ON THIS + COO IT
+        while awaitResponse > 0:
+            self.await_response(ssh)
+            buf += self.lastOut
+            if checkReturn in self.lastOut:
+                break
+            awaitResponse -= 1
+        self.lastOut = buf
         if checkReturn not in self.lastOut:
-            # TODO: If not found then try again. NEED TIMEOUT ON THIS + COO IT
             return False
         return ssh
 
@@ -1720,9 +1794,3 @@ def enqueue_output(out, queue):
         queue.put(str(line, "utf-8", errors="ignore"))
         if not len(line):
             break
-
-
-def catalog_server(serverName, notNeededBut2ArgsIsGoodIDunno):
-    sublime.active_window().run_command(
-        "remote_edit", {"catalog": serverName}
-    )

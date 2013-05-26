@@ -1,8 +1,8 @@
 {
     // This is a server settigs file for the ST3 RemoteEdit plugin. For it to be
-    // found and parsed it should be saved with a ".server" extension in the
-    // Packages/User/RemoteEdit/ folder. The file name of the saved file before
-    // the .server extension will be used as the name of your server.
+    // found and parsed it should be saved in the Packages/User/RemoteEdit/Cats/
+    // folder. The file name of the saved file before the .server extension will
+    // be used as the name of your server.
     // e.g. Saving this file as "Alan.server" will cause this server config to
     // be referred to as "Alan".
 
@@ -24,9 +24,9 @@
     // this against production systems or where you care about the security
     // of the data on the server. This is a conveinience option for development
     // servers only. Note that remote_path must also be set.
-    "enable_catalog": ${10:false},
-    // If the catalog is enabled above this path will be used.
-    "catalog_path": "${11:/example/path/}",
+    "enable_cat": ${10:false},
+    // If the catalogue is enabled above this path will be used.
+    "cat_path": "${11:/example/path/}",
 
     // Selecting files with the below extensions will prompt the user to
     // download the file rather than opening it in ST. It can still be opened,
@@ -35,6 +35,6 @@
         "zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
         "mp3", "wav", "bz", "pyc", "ico"
     ],
-    // Exclude the below folders when cataloging the server
-    "dont_catalog_folders": [".svn", ".git"]
+    // Exclude the below folders when cataloguing the server
+    "cat_exclude_folders": [".svn", ".git"]
 }
