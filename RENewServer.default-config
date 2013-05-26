@@ -1,0 +1,40 @@
+{
+    // This is a server settigs file for the ST3 RemoteEdit plugin. For it to be
+    // found and parsed it should be saved with a ".server" extension in the
+    // Packages/User/RemoteEdit/ folder. The file name of the saved file before
+    // the .server extension will be used as the name of your server.
+    // e.g. Saving this file as "Alan.server" will cause this server config to
+    // be referred to as "Alan".
+
+    // Server connection settings, comment password to attempt pageant auth
+    "host": "${1:example.com}",
+    "user": "${2:username}",
+    ${3://}"password": "${4:password}",
+    ${5://}"port": "${6:22}",
+
+    // Where to start browsing after connecting to the server.
+    "remote_path": "${7:/example/path/}",
+
+    // If your key has a passphrase (it really should) you MUST use pageant.
+    // If you use pageant you may leave this unset.
+    ${8://}"ssh_key_file": "${9:%UserProfile%\\Documents\\putty.ppk}",
+
+    // IMPORTANT! Setting this to true will download a recursive "ls" of the
+    // entire filesystem from "remote_path" specified above. Please do not use
+    // this against production systems or where you care about the security
+    // of the data on the server. This is a conveinience option for development
+    // servers only. Note that remote_path must also be set.
+    "enable_catalog": ${10:false},
+    // If the catalog is enabled above this path will be used.
+    "catalog_path": "${11:/example/path/}",
+
+    // Selecting files with the below extensions will prompt the user to
+    // download the file rather than opening it in ST. It can still be opened,
+    // it just requires 1 extra step.
+    "dont_edit_ext": [
+        "zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
+        "mp3", "wav", "bz", "pyc", "ico"
+    ],
+    // Exclude the below folders when cataloging the server
+    "dont_catalog_folders": [".svn", ".git"]
+}
