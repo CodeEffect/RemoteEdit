@@ -67,10 +67,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     # " : File options - Selecting opens immediately%s" % (" [SELECTED]" if self.mode == "edit" else ""),
     # " : File options - Selecting shows maintenance menu%s" % (" [SELECTED]" if self.mode == "maintenance" else ""),
     # " : Turn %s extended file / folder info" % ("off" if self.info else "on")
+    #
+    # Update progress of background recursive ls so that it can be picked up if it dies
 
     def run(self, save=None):
         # Ensure that the self.servers dict is populated
-        servers = self.load_server_list()
+        self.load_server_list()
         if save:
             # Save called from external RE events handler class
             self.save(save)
@@ -79,7 +81,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.start_server(self.serverName)
         else:
             # List servers and startup options
-            self.items = servers
             items = [[
                 "%s (%s)" % (name, self.servers[name]["settings"]["host"]),
                 "User: %s, Path: %s" % (
@@ -87,6 +88,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     self.servers[name]["settings"]["remote_path"]
                 )
             ] for name in self.servers]
+            self.items = [name for name in self.servers]
             items.insert(0, [
                 " • Quick connect",
                 "Just enter a host and a username / password"
@@ -1922,7 +1924,24 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     if sl[3] not in groups:
                         groups.append(sl[3])
                     g = groups.index(sl[3])
-                    s = int(sl[4])
+                    # Parse bytes
+                    try:
+                        s = int(sl[4])
+                    except:
+                        # Some distros alias a -h into the ls command resulting
+                        # in human readable output. Here we parse this from
+                        # KB, MB, GB and TB back into bytes.
+                        if sl[4][-1] == "K":
+                            s = int(float(sl[4][0:-1]) * 1024)
+                        elif sl[4][-1] == "M":
+                            s = int(float(sl[4][0:-1]) * 1024 * 1024)
+                        elif sl[4][-1] == "G":
+                            s = int(float(sl[4][0:-1]) * 1024 * 1024 * 1024)
+                        elif sl[4][-1] == "T":
+                            s = int(float(sl[4][0:-1]) * 1024 * 1024 * 1024 * 1024)
+                        else:
+                            self.debug("Error parsing file size in line: %s" % line)
+                            s = 0
                     try:
                         d = int(time.mktime(time.strptime(
                             "%s %s" % (sl[5], sl[6]),
@@ -2115,7 +2134,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def load_server_list(self):
         # Load all files in User/RemoteEdit/Servers folder
-        serverList = []
         serverConfigPath = self.get_server_config_path()
         if not os.path.exists(serverConfigPath):
             try:
@@ -2125,13 +2143,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         for root, dirs, files in os.walk(serverConfigPath):
             for filename in fnmatch.filter(files, "*"):
                 serverName = filename[0:filename.rfind(".")]
-                serverList.append(serverName)
                 self.servers[serverName] = {}
                 self.servers[serverName]["path"] = os.path.join(root, filename)
                 self.servers[serverName]["settings"] = self.jsonify(
                     open(self.servers[serverName]["path"]).read()
                 )
-        return serverList
 
     def get_settings(self):
         if not self.settings:
