@@ -2222,6 +2222,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         wCmd = self.get_command(app)
         p = self.get_process(wCmd)
         self.await_response(p)
+        if checkReturn not in self.lastOut:
             self.await_response(p)
             if checkReturn not in self.lastOut:
                 self.debug("Connect failed: %s" % self.lastOut)
