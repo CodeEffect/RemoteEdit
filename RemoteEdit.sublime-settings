@@ -3,7 +3,7 @@
 	"cat_stale_after_hours": 24,
 	"dont_edit_ext": [
         "zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
-        "mp3", "wav", "bz", "pyc", "ico"
+        "mp3", "wav", "bz", "pyc", "ico", "bz2", "bz"
     ],
     "cat_exclude_folders": [".svn", ".git"]
 }
