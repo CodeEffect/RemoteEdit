@@ -21,6 +21,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     binPath = None
     settings = None
     settingFile = "RemoteEdit.sublime-settings"
+    bookmarksSettingsFile = "RemoteEditBookmarks.sublime-settings"
     cat = {}
     catFile = False
     forceReloadCat = True
@@ -66,8 +67,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     # " : File options - Selecting opens immediately%s" % (" [SELECTED]" if self.mode == "edit" else ""),
     # " : File options - Selecting shows maintenance menu%s" % (" [SELECTED]" if self.mode == "maintenance" else ""),
     # " : Turn %s extended file / folder info" % ("off" if self.info else "on")
-    #
-    # BOOKMARKS!
 
     def run(self, save=None):
         # Ensure that the self.servers dict is populated
@@ -279,7 +278,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             )
         s = self.list_directory(self.lastDir)
         if not s:
-            # error message
+            # Error message
             return self.error_message(
                 "Error connecting to %s" % self.serverName,
                 True
@@ -504,7 +503,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             ]
             self.show_quick_panel(self.folderOptions, self.handle_folder_options)
         elif selection == 2:
-            bookmarks = sublime.load_settings("Bookmarks.sublime-settings")
+            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
             self.items = [
                 [" • Add new bookmark at \"%s\"" % self.lastDir]
@@ -1210,17 +1209,17 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # Show the options
             self.show_quick_panel(self.items, self.handle_list)
         elif selection == 0:
-            bookmarks = sublime.load_settings("Bookmarks.sublime-settings")
+            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
             serverBookmarks.append(self.lastDir)
             bookmarks.set(self.serverName, serverBookmarks)
-            sublime.save_settings("Bookmarks.sublime-settings")
+            sublime.save_settings(self.bookmarksSettingsFile)
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
         elif selection == 1:
             self.items = []
             self.itemPaths = []
-            bookmarks = sublime.load_settings("Bookmarks.sublime-settings")
+            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
             if len(serverBookmarks) == 0:
                 self.error_message("No bookmarks to edit")
@@ -1236,7 +1235,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         elif selection == 2:
             self.items = []
             self.itemPaths = []
-            bookmarks = sublime.load_settings("Bookmarks.sublime-settings")
+            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
             if len(serverBookmarks) == 0:
                 self.error_message("No bookmarks to delete")
@@ -1254,7 +1253,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def handle_bookmarks_edit(self, selection):
         if selection == -1:
-            bookmarks = sublime.load_settings("Bookmarks.sublime-settings")
+            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
             self.items = [
                 [" • Add new bookmark at \"%s\"" % self.lastDir],
@@ -1277,14 +1276,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def handle_bookmark_edit(self, text):
         if text:
-            bookmarks = sublime.load_settings("Bookmarks.sublime-settings")
+            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
             b = serverBookmarks.index(self.selected)
             serverBookmarks[b] = text
             bookmarks.set(self.serverName, serverBookmarks)
-            sublime.save_settings("Bookmarks.sublime-settings")
+            sublime.save_settings(self.bookmarksSettingsFile)
         else:
-            bookmarks = sublime.load_settings("Bookmarks.sublime-settings")
+            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
         self.items = [
             [" • Add new bookmark at \"%s\"" % self.lastDir],
@@ -1297,16 +1296,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def handle_bookmarks_delete(self, selection):
         if selection == -1:
-            bookmarks = sublime.load_settings("Bookmarks.sublime-settings")
+            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
         else:
             selected = self.itemPaths[selection]
-            bookmarks = sublime.load_settings("Bookmarks.sublime-settings")
+            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
             b = serverBookmarks.index(selected)
             del serverBookmarks[b]
             bookmarks.set(self.serverName, serverBookmarks)
-            sublime.save_settings("Bookmarks.sublime-settings")
+            sublime.save_settings(self.bookmarksSettingsFile)
         self.items = [
             [" • Add new bookmark at \"%s\"" % self.lastDir]
         ]
@@ -1318,7 +1317,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.show_quick_panel(self.items, self.handle_bookmarks_list)
 
     def show_bookmarks(self):
-        bookmarks = sublime.load_settings("Bookmarks.sublime-settings")
+        bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
         serverBookmarks = bookmarks.get(self.serverName, [])
         self.items = [
             [" • Add new bookmark at \"%s\"" % self.lastDir]
