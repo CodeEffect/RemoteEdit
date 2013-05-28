@@ -552,7 +552,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             if fileType == self.FILE_TYPE_FILE:
                 self.maintain_or_download(selected)
             elif fileType == self.FILE_TYPE_FOLDER:
-                if selection == 2:
+                if selection == 3:
                     if len(self.lastDir) <= 1:
                         self.lastDir = "/"
                     else:
@@ -2222,9 +2222,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         wCmd = self.get_command(app)
         p = self.get_process(wCmd)
         self.await_response(p)
-        if checkReturn not in self.lastOut:
-            self.debug("Connect failed: %s" % self.lastOut)
-            return False
+            self.await_response(p)
+            if checkReturn not in self.lastOut:
+                self.debug("Connect failed: %s" % self.lastOut)
+                return False
         return p
 
     def send_command(self, p, cmd):
