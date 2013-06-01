@@ -1,9 +1,9 @@
 {
-    // This is a server settigs file for the ST3 RemoteEdit plugin. For it to be
-    // found and parsed it should be saved in the Packages/User/RemoteEdit/Cats/
+    // This is a server settings file for the ST3 RemoteEdit plugin. For it to be
+    // found and parsed it should be saved in the Packages/User/RemoteEdit/Servers/
     // folder. The file name of the saved file before the .server extension will
     // be used as the name of your server.
-    // e.g. Saving this file as "Alan.server" will cause this server config to
+    // For example, saving this file as "Alan.server" will cause this server to
     // be referred to as "Alan".
 
     // Server connection settings, comment password to attempt pageant auth
@@ -20,13 +20,43 @@
     ${8://}"ssh_key_file": "${9:%UserProfile%\\Documents\\putty.ppk}",
 
     // IMPORTANT! Setting this to true will download a recursive "ls" of the
-    // entire filesystem from "remote_path" specified above. Please do not use
-    // this against production systems or where you care about the security
-    // of the data on the server. This is a conveinience option for development
-    // servers only. Note that remote_path must also be set.
+    // entire filesystem from "remote_path" specified above. This makes browsing
+    // the server as fast as if it were local and allows teh plugin to replicate
+    // CTRL+P functionality. Please do not use this against production systems
+    // or where you care about the security of the data on the server. This is
+    // a conveinience option for development servers only. Note that cat_path
+    // (below) must also be set.
     "enable_cat": ${10:false},
     // If the catalogue is enabled above this path will be used.
     "cat_path": "${11:/example/path/}",
+
+    // Some of the functionality uses plink to connect to the server over SSH
+    // and use ommands such as ls, grep etc. For this to be successful it needs
+    // to know the text of the command prompt so that it can look for it after
+    // sending a command. Usually just a dollar here is sufficient but if you
+    // have configured your prompt to be something other than that then you may
+    // need to set the below.
+    "prompt_contains": "${12:\$}",
+
+    // Default file / folder listing order by. ("name", "type", "size", "modified")
+    "order_by": "${13:name}",
+    // Reverse the default sort direction
+    "order_reverse": ${14:false},
+    // Show or hide hidden files by default
+    "show_hidden": ${15:false},
+    // Browsing mode can be "edit" or "maintenance". Edit will by default open
+    // remote files in Sublime when they are selected. Maintenance will list
+    // available actions for that file such as chmod, rename, move, copy etc
+    "browsing_mode": "${16:edit}",
+    // Whether to show extended info about each file in the quick panel list. If
+    // true the list will contain the name, path, permissions, owner, size and
+    // last modified time. If false it will just include the file name.
+    "show_file_info": ${17:false},
+
+    // Some operations require the use of a temporary file system (cataloguing,
+    // grepping, compressing). By defauly we use /tmp but if you do need to
+    // override this set it here.
+    "temp_path": "${18:/tmp}",
 
     // Selecting files with the below extensions will prompt the user to
     // download the file rather than opening it in ST. It can still be opened,
@@ -35,6 +65,6 @@
         "zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
         "mp3", "wav", "bz", "pyc", "ico"
     ],
-    // Exclude the below folders when cataloguing the server
+    // Exclude the below folders when cataloguing the server.
     "cat_exclude_folders": [".svn", ".git"]
 }

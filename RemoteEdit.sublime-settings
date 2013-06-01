@@ -1,9 +1,23 @@
 {
+	// The default directory to use when downloading files (not to edit), zipped
+	// files etc.
 	"download_folder": "%UserProfile%\\Downloads",
+
+	// Consider the server catalogue file stale after this many hours. We don't
+	// immediately delete it but we update it straight away.
 	"cat_stale_after_hours": 24,
+
+	// By default we will prompt if a user selects to edit a file with any of
+	// the below extensions. It's still possible to open them in sublime but
+	// you will just get the maintenance step in between whether it's enabled
+	// or not.
 	"dont_edit_ext": [
         "zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
         "mp3", "wav", "bz", "pyc", "ico", "bz2", "bz"
     ],
+
+    // Don't include files or folders with any of these names in the catalogue.
+    // This reduces the size of the catalogue by over half and ensures that
+    // these files don't come up when searching.
     "cat_exclude_folders": [".svn", ".git"]
 }
