@@ -38,6 +38,7 @@ class RemoteEditConnectionWorker(threading.Thread):
     binPath = None
     promptContains = None
     quit = False
+    lostConnection = 0
 
     serverName = None
     appType = None
@@ -123,6 +124,7 @@ class RemoteEditConnectionWorker(threading.Thread):
             self.debug("Error connecting")
             return False
         # Write the cmd string to stdin
+        self.lostConnection = 0
         if cmd and not self.write_command(cmd):
             self.debug("Error writing")
             return False
@@ -131,6 +133,17 @@ class RemoteEditConnectionWorker(threading.Thread):
         while listenAttempts > 0:
             self.debug("Now listening")
             self.await_response()
+            # If we lost connection after writing then try again
+            # We check for 1 to ensure that we only do this once
+            if self.lostConnection == 1:
+                if self.connect(promptContains):
+                    if cmd:
+                        if not self.write_command(cmd):
+                            self.debug("Error writing after reconnect")
+                            break
+                        self.await_response()
+                else:
+                    self.lastOut = ""
             buf += self.lastOut
             if checkReturn in self.lastOut:
                 self.debug("Found checkReturn")
@@ -185,6 +198,7 @@ class RemoteEditConnectionWorker(threading.Thread):
             # stdin write it now reports a returncode of 1 but keeps running.
             if self.process.poll() is not None:
                 self.debug("Process died")
+                self.lostConnection += 1
                 break
             if (self.lastOut or self.lastErr) and not outB and not errB:
                 i += 1
