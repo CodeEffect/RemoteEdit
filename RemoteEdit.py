@@ -16,6 +16,10 @@ from .remote_edit import RemoteEditConnectionWorker
 
 class RemoteEditCommand(sublime_plugin.WindowCommand):
 
+    items = None
+    itemPaths = None
+    selected = None
+    movingFrom = None
     servers = {}
     serverName = None
     sshQueue = None
@@ -63,7 +67,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     # Add links to find command results
     # Make sure temp name is unique
-    # ESCAPING ESCAPING ESCAPING - add escaping function
     #
     # per server filename filters, add filters
     # filter by file size
@@ -72,12 +75,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     # Update progress of background recursive ls so that it can be picked up if it dies
     #
     # Copy directories to another location / server
-    # set temp path
-    # cat_stale_after_hours, refresh folder, refresh catalogue
     # server remote_path setting as dict + auto add to bookmarks.
-    # Add new threads for cat creation.
     # Add sftp only option
-    # download file list (ls)
 
     def run(self, save=None):
         # Ensure that the self.servers dict is populated
@@ -372,7 +371,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.run()
             return
         # Open a connection to the server and present the user with filelist
-        # etc
         self.open_server()
 
     def open_server(self):
@@ -628,7 +626,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 [" • Copy '%s'" % selected],
                 [" • Save to %s" % downloadFolder],
                 [" • Save to %s and open" % downloadFolder],
-                [" • Zip '%s'" % selected],
+                [" • Zip '%s' (and optionally download)" % selected],
                 [" • chmod '%s'" % selected],
                 [" • chown '%s'" % selected],
                 [" • Delete '%s'" % selected]
@@ -646,6 +644,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     "Error connecting to %s" % self.serverName
                 )
         elif selection == 1:
+            # Rename
             caption = "Rename to: "
             self.show_input_panel(
                 caption,
@@ -655,27 +654,23 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.show_list
             )
         elif selection == 2:
-            #TODO
-            self.error_message("TODO!")
-            caption = "Move to: "
-            self.show_input_panel(
-                caption,
-                self.selected,
-                self.handle_rename,
-                self.handle_change,
-                self.show_list
-            )
+            # Move
+            self.movingFrom = self.lastDir
+            self.list_directory(self.lastDir, skipOptions=True, foldersOnly=True)
+            self.items.insert(0, ".. Up a folder")
+            self.itemPaths.insert(0, "UP")
+            self.items.insert(0, "Showing %s/, select a path to move %s to" % (self.lastDir, self.selected))
+            self.itemPaths.insert(0, "MOVE")
+            self.show_quick_panel(self.items, self.handle_move)
         elif selection == 3:
-            #TODO
-            self.error_message("TODO!")
-            caption = "Copy to: "
-            self.show_input_panel(
-                caption,
-                self.selected,
-                self.handle_rename,
-                self.handle_change,
-                self.show_list
-            )
+            # Copy
+            self.movingFrom = self.lastDir
+            self.list_directory(self.lastDir, skipOptions=True, foldersOnly=True)
+            self.items.insert(0, ".. Up a folder")
+            self.itemPaths.insert(0, "UP")
+            self.items.insert(0, "Showing %s/, select a path to copy %s to" % (self.lastDir, self.selected))
+            self.itemPaths.insert(0, "COPY")
+            self.show_quick_panel(self.items, self.handle_copy)
         elif selection == 4 or selection == 5:
             # Save file to download folder
             downloadFolder = os.path.expandvars(
@@ -694,16 +689,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 )
                 os.startfile(f)
         elif selection == 6:
-            # items = [
-            #     "bzip2",
-            #     "gzip",
-            #     "zip"
-            # ]
-            # # TODO!!
-            # self.show_quick_panel(items, self.handle_compress)
-            pass
-
+            # Zip
+            items = [
+                "Compress '%s' with bzip2 (.tar.bz2)" % self.selected,
+                "Compress '%s' with gzip (.tar.gz)" % self.selected,
+                "Compress '%s' with zip (.zip)" % self.selected,
+                "Compress '%s' with lzma (.tar.xz)" % self.selected
+            ]
+            self.show_quick_panel(items, self.handle_compress)
         elif selection == 7:
+            # chmod
             caption = "chmod to: "
             perms = self.get_perms(self.join_path(self.lastDir, self.selected))
             self.show_input_panel(
@@ -714,6 +709,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.show_list
             )
         elif selection == 8:
+            # chown
             caption = "chown to: "
             (user, group) = self.get_user_and_group(
                 self.join_path(self.lastDir, self.selected)
@@ -726,6 +722,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.show_list
             )
         elif selection == 9:
+            # Delete
             if sublime.ok_cancel_dialog(
                 "Are you sure you want to delete %s?" % self.selected,
                 "Delete"
@@ -770,11 +767,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if selection == -1:
             return self.show_quick_panel(self.items, self.handle_list)
         elif selection == 0:
-            ext = "bz2"
+            ext = "tar.bz2"
         elif selection == 1:
             ext = "tar.gz"
         elif selection == 2:
             ext = "zip"
+        elif selection == 3:
+            ext = "tar.xz"
         else:
             return self.error_message("Unknown compression method")
         self.selection = selection
@@ -797,7 +796,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         elif selection == 0:
             download = True
         if self.selection == 0:
-            ext = "bz2"
+            ext = "tar.bz2"
             cmd = "tar --bzip2 -cf"
         elif self.selection == 1:
             ext = "tar.gz"
@@ -805,16 +804,23 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         elif self.selection == 2:
             ext = "zip"
             cmd = "zip -rq"
-        compressTo = "%s/%s.%s" % (
-            self.tempPath,
-            self.split_path(self.lastDir)[1],
+        elif self.selection == 3:
+            ext = "tar.xz"
+            cmd = "tar --lzma -cf"
+        fileName = "%s-%s.%s" % (
+            self.split_path(self.lastDir)[1] if self.selected == "." else self.selected,
+            time.strftime("%Y-%m-%d_%H.%M"),
             ext
+        )
+        compressTo = "%s/%s" % (
+            self.tempPath,
+            fileName
         )
         cmd = "cd %s && %s %s %s && echo $((66666 + 44445));" % (
             self.escape_remote_path(self.lastDir),
             cmd,
             self.escape_remote_path(compressTo),
-            "."
+            self.selected
         )
         checkReturn = "111111"
         success = self.run_ssh_command(
@@ -832,18 +838,15 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 downloadFolder = os.path.expandvars(
                     self.get_settings().get("download_folder")
                 )
-                localPath = "%s.%s" % (
-                    os.path.join(
-                        downloadFolder,
-                        self.escape_local_path(self.split_path(self.lastDir)[1])
-                    ),
-                    ext
+                localPath = self.join_path(
+                    downloadFolder,
+                    fileName
                 )
                 cmd = "get %s %s" % (
                     self.escape_remote_path(compressTo),
                     self.escape_remote_path(localPath)
                 )
-                success = self.run_sftp_command(cmd)
+                success = self.run_sftp_command(cmd, listenAttempts=2)
                 if success:
                     self.debug("Successfully downloaded file %s" % localPath)
                     sublime.message_dialog("File %s.%s downloaded successfully" % (
@@ -1016,7 +1019,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             return self.show_quick_panel(self.items, self.handle_list)
         # Show the options
         if f and "/" in f and f["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FILE:
-            return self.maintain_or_download(path)
+            (self.lastDir, selected) = self.split_path(path)
+            return self.maintain_or_download(selected)
         self.show_quick_panel(self.items, self.handle_list)
 
     def handle_folder_options(self, selection):
@@ -1080,26 +1084,22 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             )
         elif selection == 7:
             # Move
-            self.selected = self.lastDir.rstrip("/")
-            (head, tail) = self.split_path(self.lastDir)
-            self.lastDir = head
-            self.moving = tail
+            (self.lastDir, self.selected) = self.split_path(self.lastDir)
+            self.movingFrom = self.lastDir.rstrip("/")
             self.list_directory(self.lastDir, skipOptions=True, foldersOnly=True)
             self.items.insert(0, ".. Up a folder")
             self.itemPaths.insert(0, "UP")
-            self.items.insert(0, "Showing %s/, select a path to move %s to" % (self.lastDir, self.moving))
+            self.items.insert(0, "Showing %s/, select a path to move %s to" % (self.lastDir, self.selected))
             self.itemPaths.insert(0, "MOVE")
             self.show_quick_panel(self.items, self.handle_move)
         elif selection == 8:
             # Copy
-            self.selected = self.lastDir.rstrip("/")
-            (head, tail) = self.split_path(self.lastDir)
-            self.lastDir = head
-            self.moving = tail
+            (self.lastDir, self.selected) = self.split_path(self.lastDir)
+            self.movingFrom = self.lastDir.rstrip("/")
             self.list_directory(self.lastDir, skipOptions=True, foldersOnly=True)
             self.items.insert(0, ".. Up a folder")
             self.itemPaths.insert(0, "UP")
-            self.items.insert(0, "Showing %s/, select a path to copy %s to" % (self.lastDir, self.moving))
+            self.items.insert(0, "Showing %s/, select a path to copy %s to" % (self.lastDir, self.selected))
             self.itemPaths.insert(0, "COPY")
             self.show_quick_panel(self.items, self.handle_copy)
         elif selection == 9:
@@ -1115,16 +1115,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     "contents": ls
                 }
             )
-            # Back to prev list
-            self.show_quick_panel(self.items, self.handle_list)
         elif selection == 10:
-            # zip
+            # Zip
+            (head, tail) = self.split_path(self.lastDir)
             items = [
-                "bzip2",
-                "gzip",
-                "zip"
+                "Compress '%s' with bzip2 (.tar.bz2)" % tail,
+                "Compress '%s' with gzip (.tar.gz)" % tail,
+                "Compress '%s' with zip (.zip)" % tail,
+                "Compress '%s' with lzma (.tar.xz)" % tail
             ]
-            # TODO: Append date to filename
+            self.selected = "."
             self.show_quick_panel(items, self.handle_compress)
         elif selection == 11:
             # chmod
@@ -1370,21 +1370,22 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.show_current_path_panel()
         elif selection == 0:
             # Move self.selected to self.lastDir
-            if self.split_path(self.selected)[0] == self.lastDir:
+            if self.movingFrom == self.lastDir:
                 self.error_message("Source and destination paths are the same (%s), unable to move" % self.lastDir)
             else:
                 cmd = "mv %s %s" % (
-                    self.escape_remote_path(self.selected),
+                    self.escape_remote_path(self.join_path(
+                        self.movingFrom,
+                        self.selected
+                    )),
                     self.escape_remote_path(self.lastDir.rstrip("/") + "/")
                 )
                 if self.run_sftp_command(cmd):
-                    (head, tail) = self.split_path(self.selected)
-                    self.list_directory(head, forceReload=True)
+                    self.list_directory(self.movingFrom, forceReload=True)
                     return self.show_current_path_panel(forceReload=True)
         else:
             if selection == 1:
-                (head, tail) = self.split_path(self.lastDir)
-                self.lastDir = head
+                (self.lastDir, tail) = self.split_path(self.lastDir)
             else:
                 self.lastDir = self.join_path(
                     self.lastDir,
@@ -1393,10 +1394,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.list_directory(self.lastDir, foldersOnly=True, skipOptions=True)
         self.items.insert(0, ".. Up a folder")
         self.itemPaths.insert(0, "UP")
-        if self.split_path(self.selected)[0] == self.lastDir:
-            self.items.insert(0, "Showing %s/, select a path to move %s to" % (self.lastDir, self.moving))
+        if self.movingFrom == self.lastDir:
+            self.items.insert(0, "Showing %s/, select a path to move %s to" % (self.lastDir, self.selected))
         else:
-            self.items.insert(0, "Move %s to %s/" % (self.moving, self.lastDir))
+            self.items.insert(0, "Move %s to %s/" % (self.selected, self.lastDir))
         self.itemPaths.insert(0, "MOVE")
         self.show_quick_panel(self.items, self.handle_move)
 
@@ -1405,21 +1406,22 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.show_current_path_panel()
         elif selection == 0:
             # Copy self.selected to self.lastDir
-            if self.split_path(self.selected)[0] == self.lastDir:
+            if self.movingFrom == self.lastDir:
                 self.error_message("Source and destination paths are the same (%s), unable to copy" % self.lastDir)
             else:
                 cmd = "cp -r %s %s" % (
-                    self.escape_remote_path(self.selected),
+                    self.escape_remote_path(self.join_path(
+                        self.movingFrom,
+                        self.selected
+                    )),
                     self.escape_remote_path(self.lastDir.rstrip("/") + "/")
                 )
                 if self.run_ssh_command(cmd, listenAttempts=2):
-                    (head, tail) = self.split_path(self.selected)
-                    self.list_directory(head, forceReload=True)
+                    self.list_directory(self.movingFrom, forceReload=True)
                     return self.show_current_path_panel(forceReload=True)
         else:
             if selection == 1:
-                (head, tail) = self.split_path(self.lastDir)
-                self.lastDir = head
+                (self.lastDir, tail) = self.split_path(self.lastDir)
             else:
                 self.lastDir = self.join_path(
                     self.lastDir,
@@ -1428,10 +1430,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.list_directory(self.lastDir, foldersOnly=True, skipOptions=True)
         self.items.insert(0, ".. Up a folder")
         self.itemPaths.insert(0, "UP")
-        if self.split_path(self.selected)[0] == self.lastDir:
-            self.items.insert(0, "Showing %s/, select a path to copy %s to" % (self.lastDir, self.moving))
+        if self.movingFrom == self.lastDir:
+            self.items.insert(0, "Showing %s/, select a path to copy %s to" % (self.lastDir, self.selected))
         else:
-            self.items.insert(0, "Copy %s to %s/" % (self.moving, self.lastDir))
+            self.items.insert(0, "Copy %s to %s/" % (self.selected, self.lastDir))
         self.itemPaths.insert(0, "COPY")
         self.show_quick_panel(self.items, self.handle_copy)
 
