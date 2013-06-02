@@ -44,7 +44,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     plinkPromptComtains = "$"
     psftpPromptContains = "psftp>"
     tempPath = "/tmp"
-    timeout = 10
+    timeout = 30
     FILE_TYPE_FILE = 0
     FILE_TYPE_FOLDER = 1
     FILE_TYPE_SYMLINK = 2
@@ -76,6 +76,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     # cat_stale_after_hours, refresh folder, refresh catalogue
     # server remote_path setting as dict + auto add to bookmarks.
     # Add new threads for cat creation.
+    # Add sftp only option
+    # download file list (ls)
 
     def run(self, save=None):
         # Ensure that the self.servers dict is populated
@@ -148,6 +150,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         )
 
     def __del__(self):
+        self.debug("__del__ called")
         self.remove_ssh_thread(len(self.sshThreads))
         self.remove_sftp_thread(len(self.sftpThreads))
 
@@ -156,11 +159,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if tc > 0:
             index = tc - 1
             threadsToRemove -= 1
-            self.debug("POPPING SSH")
+            self.debug("Popping ssh")
             self.sshThreads.pop()
             # We need to send tc * messages down the wire so that each thread
-            # gets a copy of the message. The threadId of each thread is the
-            # key of the list.
+            # gets a copy of the message. The threadId of each thread is its
+            # key on the list.
             for i in range(tc):
                 self.sshQueue.put({"KILL": index})
             if threadsToRemove > 0:
@@ -171,11 +174,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if tc > 0:
             index = tc - 1
             threadsToRemove -= 1
-            self.debug("POPPING SFTP")
+            self.debug("Popping sftp")
             self.sftpThreads.pop()
             # We need to send tc * messages down the wire so that each thread
-            # gets a copy of the message. The threadId of each thread is the
-            # key of the list.
+            # gets a copy of the message. The threadId of each thread is its
+            # key on the list.
             for i in range(tc):
                 self.sftpQueue.put({"KILL": index})
             if threadsToRemove > 0:
@@ -226,8 +229,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 )
         # Initiate the save
         cmd = "put %s %s" % (
-            localFile,
-            remoteFile
+            self.escape_remote_path(localFile),
+            self.escape_remote_path(remoteFile)
         )
         if not self.run_sftp_command(cmd):
             self.release_lock(lockFile)
@@ -306,7 +309,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if view.is_loading():
             sublime.set_timeout(lambda: self.insert_snippet(snippet), 100)
         else:
-            print(snippet)
             view.run_command("insert_snippet", {"contents": snippet})
 
     def start_server(self, serverName, quickConnect=False):
@@ -385,7 +387,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "remote_path",
                 "/home/%s" % self.get_server_setting("user")
             )
-        self.show_current_path_panel()
+        self.check_cat()
+        self.show_current_path_panel(doCat=False)
 
     def handle_quick_host(self, cs):
         self.server = {}
@@ -421,17 +424,21 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def handle_fuzzy(self, selection):
         if selection == -1:
-            return
-        (self.lastDir, selected) = self.split_path(self.items[selection][1])
-        self.maintain_or_download(selected)
+            self.show_current_path_panel()
+        else:
+            (self.lastDir, selected) = self.split_path(self.items[selection][1])
+            self.maintain_or_download(selected)
 
     def handle_grep(self, search):
-        # self.debug(search)
         if not search:
             return self.show_quick_panel(self.items, self.handle_list)
-        # TODO: Better random FN, hash a view?
-        # Check unused? Check TMP PATH?
-        tmpFileName = "RemoteEdit_%s_grep" % time.time()
+        m = hashlib.md5()
+        m.update(("%s%s%s" % (
+            search,
+            str(time.time()),
+            self.lastDir
+        )).encode('utf-8'))
+        tmpFileName = "RE_%s.grep" % m.hexdigest()
         remotePath = "%s/%s" % (self.tempPath, tmpFileName)
         localPath = os.path.join(
             self.get_local_tmp_path(),
@@ -443,13 +450,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 exclude += "--exclude-dir=\"%s\" " % f
         # Direct the grep output to a file and download it to parse
         cmd = "cd %s && grep -i %s-nR -A2 -B2 \"%s\" . > %s 2>/dev/null; echo %s;" % (
-            self.lastDir,
+            self.escape_remote_path(self.lastDir),
             exclude,
-            search,
-            remotePath,
-            "$((66666 + 44445))"
+            self.escape_remote_path(search),
+            self.escape_remote_path(remotePath),
+            "$(((66666 + 44445) * 1000000 + (333333 * 3)))"
         )
-        checkReturn = "111111"
+        checkReturn = "111111999999"
         success = self.run_ssh_command(
             cmd,
             checkReturn=checkReturn,
@@ -459,92 +466,28 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             return self.command_error(cmd)
         # Download results
         cmd = "get %s %s" % (
-            remotePath,
-            localPath
+            self.escape_remote_path(remotePath),
+            self.escape_remote_path(localPath)
         )
         success = self.run_sftp_command(cmd)
         if not success:
             return self.command_error(cmd)
-        try:
-            lf = open(localPath, "r", encoding="utf-8", errors="ignore")
-            results = lf.read()
-            lf.close()
-        except:
-            # TODO, return here && error msg
-            results = ""
-        # Parse the results
-        i = 0
-        matches = 0
-        files = {}
-        inResult = False
-        resultsText = []
-        resultsText.append("Searching for \"%s\" on %s\n" % (
-            search,
-            self.serverName
-        ))
-        aroundLine = re.compile("\.\/(.+)-([0-9]+)-(.*)")
-        resultLine = re.compile("\.\/(.+):([0-9]+):(.*)")
-        for line in results.split("\n"):
-            i += 1
-            if i is 1:
-                # First line is our search command
-                continue
-            if "111111" in line:
-                # We're done
-                break
-            # self.debug(line[0:5])
-            if line and line[0:2] == "--":
-                inResult = False
-                continue
-            aroundMatch = re.search(aroundLine, line)
-            resultMatch = re.search(resultLine, line)
-            if aroundMatch:
-                fileName = aroundMatch.group(1)
-            elif resultMatch:
-                fileName = resultMatch.group(1)
-            if not inResult and (resultMatch or aroundMatch):
-                inResult = True
-                if aroundMatch.group(1) in files:
-                    resultsText.append("  ..\n")
-                else:
-                    resultsText.append("\n%s%s:\n" % (self.lastDir, fileName))
-                files[aroundMatch.group(1)] = True
-            if aroundMatch:
-                resultsText.append("  %s%s\n" % (
-                    aroundMatch.group(2).ljust(4),
-                    aroundMatch.group(3).rstrip()
-                ))
-            if resultMatch:
-                matches += 1
-                ln = "%s:" % resultMatch.group(2)
-                resultsText.append("  %s%s\n" % (
-                    ln.ljust(4),
-                    resultMatch.group(3).rstrip()
-                ))
-        resultsText.append("\n%s matche%s across %s file%s\n\n" % (
-            matches,
-            "" if matches is 1 else "s",
-            len(files),
-            "" if len(files) is 1 else "s"
-        ))
-        # Open a new tab
-        # TODO: Make this pass the filename instead of the text
+        # Now delete remote file
+        cmd = "del %s" % (
+            self.escape_remote_path(remotePath)
+        )
+        self.run_sftp_command(cmd, dropResults=True)
+        # Parse returned grep and display the results
+        self.debug("Calling search results lister")
         self.window.run_command(
             "remote_edit_display_search",
             {
-                "findResults": "".join(resultsText),
-                "serverName": self.serverName
+                "search": search,
+                "filePath": localPath,
+                "serverName": self.serverName,
+                "baseDir": self.lastDir
             }
         )
-        # Now delete remote and local files
-        cmd = "del \"%s\"" % (
-            remotePath
-        )
-        success = self.run_sftp_command(cmd)
-        # try:
-        #     os.remove(localPath)
-        # except:
-        #     pass
 
     def handle_list(self, selection):
         if selection == -1:
@@ -573,6 +516,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 " • Rename folder '%s'" % tail,
                 " • Move folder '%s'" % tail,
                 " • Copy folder '%s'" % tail,
+                " • List folder '%s' contents" % tail,
                 " • Zip contents of '%s' (and optionally download)" % tail,
                 " • Chmod '%s'" % tail,
                 " • Chown '%s'" % tail,
@@ -589,17 +533,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             ]
             self.show_quick_panel(self.folderOptions, self.handle_folder_options)
         elif selection == 2:
-            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
-            serverBookmarks = bookmarks.get(self.serverName, [])
-            self.items = [
-                [" • Add new bookmark at \"%s\"" % self.lastDir]
-            ]
-            if len(serverBookmarks) > 0:
-                self.items.append(" • Edit a bookmark")
-                self.items.append(" • Delete a bookmark")
-            for b in serverBookmarks:
-                self.items.append(b)
-            self.show_quick_panel(self.items, self.handle_bookmarks_list)
+            self.list_bookmarks()
         else:
             # If we're going up a folder...
             if selection == 3:
@@ -617,7 +551,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     # We don't know where it links to
                     if path[-1] != "/":
                         path += "/"
-                    cmd = "ls %s %s" % (self.lsParams, path)
+                    cmd = "ls %s %s" % (
+                        self.escape_remote_path(self.lsParams),
+                        self.escape_remote_path(path)
+                    )
                     if not self.run_ssh_command(cmd):
                         return self.command_error(cmd)
                     # Parse the ls and add to the catalogue (but don't save the file)
@@ -792,8 +729,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "Are you sure you want to delete %s?" % self.selected,
                 "Delete"
             ):
-                cmd = "rm \"%s\"" % (
-                    self.join_path(self.lastDir, self.selected)
+                cmd = "rm %s" % (
+                    self.escape_remote_path(
+                        self.join_path(self.lastDir, self.selected)
+                    )
                 )
                 if not self.run_sftp_command(cmd) or "failure" in self.lastOut:
                     return self.command_error(cmd)
@@ -812,8 +751,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             oldPath = self.join_path(head, tail)
             newPath = self.join_path(head, fileName)
             cmd = "mv %s %s" % (
-                oldPath,
-                newPath
+                self.escape_remote_path(oldPath),
+                self.escape_remote_path(newPath)
             )
             if not self.run_sftp_command(cmd):
                 return self.command_error(cmd)
@@ -870,10 +809,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.split_path(self.lastDir)[1],
             ext
         )
-        cmd = "cd \"%s\" && %s \"%s\" %s && echo $((66666 + 44445));" % (
-            self.lastDir,
+        cmd = "cd %s && %s %s %s && echo $((66666 + 44445));" % (
+            self.escape_remote_path(self.lastDir),
             cmd,
-            compressTo,
+            self.escape_remote_path(compressTo),
             "."
         )
         checkReturn = "111111"
@@ -895,13 +834,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 localPath = "%s.%s" % (
                     os.path.join(
                         downloadFolder,
-                        self.split_path(self.lastDir)[1]
+                        self.escape_local_path(self.split_path(self.lastDir)[1])
                     ),
                     ext
                 )
-                cmd = "get \"%s\" \"%s\"" % (
-                    compressTo,
-                    localPath
+                cmd = "get %s %s" % (
+                    self.escape_remote_path(compressTo),
+                    self.escape_remote_path(localPath)
                 )
                 success = self.run_sftp_command(cmd)
                 if success:
@@ -914,7 +853,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                         ext
                     ))
                     # Tidy up after ourselves
-                    cmd = "del \"%s\"" % (compressTo)
+                    cmd = "del %s" % (
+                        self.escape_remote_path(compressTo)
+                    )
                     success = self.run_sftp_command(cmd)
                     if success:
                         self.debug("Successfully removed file %s" % compressTo)
@@ -925,15 +866,15 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     self.error_message("File compressed successfully but download failed. Your compressed file is at \"%s\"" % compressTo)
                 self.list_directory(self.lastDir)
             else:
-                cmd = "mv \"%s\" \"%s\"" % (
-                    compressTo,
-                    "%s.%s" % (
+                cmd = "mv %s %s" % (
+                    self.escape_remote_path(compressTo),
+                    self.escape_remote_path("%s.%s" % (
                         self.join_path(
                             self.lastDir,
                             self.split_path(self.lastDir)[1]
                         ),
                         ext
-                    )
+                    ))
                 )
                 # For some odd reason psftp fails to move a file from /tmp to
                 # /home. Permissions and everything are fine, I just get an error
@@ -945,7 +886,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     self.error_message("Error moving compressed file to %s" % (
                         self.lastDir
                     ))
-                self.list_directory(self.lastDir, force=True)
+                self.list_directory(self.lastDir, forceReload=True)
         self.list_directory(self.lastDir)
         self.show_quick_panel(self.items, self.handle_list)
 
@@ -967,7 +908,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handle_change,
                 self.show_list
             )
-        cmd = "chmod \"%s\" %s" % (chmod, fileName)
+        cmd = "chmod %s %s" % (
+            chmod,
+            self.escape_remote_path(fileName)
+        )
         success = self.run_sftp_command(cmd)
         if not success:
             return self.command_error(cmd)
@@ -982,7 +926,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         else:
             fileName = self.join_path(self.lastDir, self.selected)
         # Chown is not available in psftp
-        cmd = "chown %s \"%s\"" % (chown, fileName)
+        cmd = "chown %s %s" % (
+            chown,
+            self.escape_remote_path(fileName)
+        )
         if not self.run_ssh_command(cmd):
             return self.command_error(cmd)
         else:
@@ -994,7 +941,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     )
                 )
             else:
-                self.list_directory(self.lastDir, force=True)
+                self.list_directory(self.lastDir, forceReload=True)
             self.show_quick_panel(self.items, self.handle_list)
 
     def show_list(self):
@@ -1099,7 +1046,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.show_list
             )
         elif selection == 4:
-            # new file
+            # New file
             caption = "Enter file name: "
             self.show_input_panel(
                 caption,
@@ -1109,7 +1056,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.show_list
             )
         elif selection == 5:
-            # new folder
+            # New folder
             caption = "Enter folder name: "
             self.show_input_panel(
                 caption,
@@ -1119,7 +1066,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.show_list
             )
         elif selection == 6:
-            # rename
+            # Rename
             caption = "Enter new name: "
             self.selected = -1
             (head, tail) = self.split_path(self.lastDir)
@@ -1131,19 +1078,17 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.show_list
             )
         elif selection == 7:
-            # move
-            # TODO: Select new path with quick panel
-            return self.error_message("TODO!")
-            caption = "Enter new name: "
-            self.selected = -1
+            # Move
+            self.selected = self.lastDir.rstrip("/")
             (head, tail) = self.split_path(self.lastDir)
-            self.show_input_panel(
-                caption,
-                tail,
-                self.handle_rename,
-                self.handle_change,
-                self.show_list
-            )
+            self.lastDir = head
+            self.moving = tail
+            self.list_directory(self.lastDir, skipOptions=True, foldersOnly=True)
+            self.items.insert(0, ".. Up a folder")
+            self.itemPaths.insert(0, "UP")
+            self.items.insert(0, "Move %s to %s/" % (self.moving, head))
+            self.itemPaths.insert(0, "MOVE")
+            self.show_quick_panel(self.items, self.handle_move)
         elif selection == 8:
             # copy
             # #TODO
@@ -1159,6 +1104,21 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.show_list
             )
         elif selection == 9:
+            # List folder contents
+            self.list_directory(self.lastDir, forceReload=True)
+            ls = ""
+            for line in self.lastOut.split("\n")[1:-1]:
+                ls += "%s\n" % line.strip()
+            self.window.run_command(
+                "remote_edit_list_folder",
+                {
+                    "path": self.lastDir,
+                    "contents": ls
+                }
+            )
+            # Back to prev list
+            self.show_quick_panel(self.items, self.handle_list)
+        elif selection == 10:
             # zip
             items = [
                 "bzip2",
@@ -1167,7 +1127,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             ]
             # TODO: Append date to filename
             self.show_quick_panel(items, self.handle_compress)
-        elif selection == 10:
+        elif selection == 11:
             # chmod
             self.selected = -1
             caption = "chmod to: "
@@ -1179,7 +1139,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handle_change,
                 self.show_list
             )
-        elif selection == 11:
+        elif selection == 12:
             # chown
             self.selected = -1
             caption = "chown to: "
@@ -1191,7 +1151,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handle_change,
                 self.show_list
             )
-        elif selection == 12:
+        elif selection == 13:
             # delete
             self.selected = -1
             (head, tail) = self.split_path(self.lastDir)
@@ -1199,7 +1159,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "Are you sure you want to delete %s?" % tail,
                 "Delete"
             ):
-                cmd = "rmdir \"%s\"" % tail
+                cmd = "rmdir %s" % self.escape_remote_path(tail)
                 if not self.run_sftp_command(cmd) or "failure" in self.lastOut:
                     return self.command_error(cmd)
                 self.lastDir = head
@@ -1207,7 +1167,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 del f[tail]
                 self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 13:
+        elif selection == 14:
             if self.orderBy == self.SORT_BY_NAME:
                 self.orderReverse = False if self.orderReverse else True
             else:
@@ -1215,7 +1175,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.orderReverse = False
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 14:
+        elif selection == 15:
             if self.orderBy == self.SORT_BY_TYPE:
                 self.orderReverse = False if self.orderReverse else True
             else:
@@ -1223,7 +1183,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.orderReverse = False
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 15:
+        elif selection == 16:
             if self.orderBy == self.SORT_BY_SIZE:
                 self.orderReverse = False if self.orderReverse else True
             else:
@@ -1231,7 +1191,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.orderReverse = True
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 16:
+        elif selection == 17:
             if self.orderBy == self.SORT_BY_MODIFIED:
                 self.orderReverse = False if self.orderReverse else True
             else:
@@ -1239,92 +1199,97 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.orderReverse = False
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 17:
+        elif selection == 18:
             # Show / hide hidden files
             self.showHidden = self.showHidden is False
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 18:
+        elif selection == 19:
             # edit mode
             self.browsingMode = "edit"
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 19:
+        elif selection == 20:
             # maintenance mode
             self.browsingMode = "maintenance"
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 20:
+        elif selection == 21:
             # Turn on / off extended file / folder info
             self.fileInfo = self.fileInfo is False
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 21:
+        elif selection == 22:
             # Refresh list
-            self.list_directory(self.lastDir, force=True)
+            self.list_directory(self.lastDir, forceReload=True)
             self.show_quick_panel(self.items, self.handle_list)
         else:
             # we shouldn't ever hit this
             return
 
+    def list_bookmarks(self):
+        bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
+        serverBookmarks = bookmarks.get(self.serverName, [])
+        self.items = []
+        self.itemPaths = []
+        if self.lastDir not in serverBookmarks:
+            self.items = [
+                [" • Add new bookmark at \"%s\"" % self.lastDir]
+            ]
+            self.itemPaths = ["ADD"]
+        if len(serverBookmarks) > 0:
+            self.items.append(" • Edit a bookmark")
+            self.items.append(" • Delete a bookmark")
+            self.itemPaths.append("EDIT")
+            self.itemPaths.append("DEL")
+        for b in serverBookmarks:
+            self.items.append("Go to: %s" % b)
+            self.itemPaths.append(b)
+        self.show_quick_panel(self.items, self.handle_bookmarks_list)
+
     def handle_bookmarks_list(self, selection):
         if selection == -1:
-            self.show_current_path_panel()
-        elif selection == 0:
+            return self.show_current_path_panel()
+        selected = self.itemPaths[selection]
+        if selected == "ADD":
             bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
-            serverBookmarks.append(self.lastDir)
+            serverBookmarks.append(self.lastDir.rstrip("/"))
             bookmarks.set(self.serverName, serverBookmarks)
             sublime.save_settings(self.bookmarksSettingsFile)
-            self.list_directory(self.lastDir)
-            self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 1:
+            self.show_current_path_panel()
+        elif selected == "EDIT":
             self.items = []
             self.itemPaths = []
             bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
             if len(serverBookmarks) == 0:
                 self.error_message("No bookmarks to edit")
-                self.items = [
-                    [" • Add new bookmark at \"%s\"" % self.lastDir]
-                ]
-                self.show_quick_panel(self.items, self.handle_bookmarks_list)
+                self.list_bookmarks()
             else:
                 for b in serverBookmarks:
                     self.items.append("Edit: %s" % b)
                     self.itemPaths.append(b)
                 self.show_quick_panel(self.items, self.handle_bookmarks_edit)
-        elif selection == 2:
+        elif selected == "DEL":
             self.items = []
             self.itemPaths = []
             bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
             if len(serverBookmarks) == 0:
                 self.error_message("No bookmarks to delete")
-                self.items = [
-                    [" • Add new bookmark at \"%s\"" % self.lastDir]
-                ]
-                self.show_quick_panel(self.items, self.handle_bookmarks_list)
+                self.list_bookmarks()
             else:
                 for b in serverBookmarks:
                     self.items.append("Delete: %s" % b)
                     self.itemPaths.append(b)
                 self.show_quick_panel(self.items, self.handle_bookmarks_delete)
         else:
-            self.handle_navigate(self.items[selection])
+            self.handle_navigate(self.itemPaths[selection])
 
     def handle_bookmarks_edit(self, selection):
         if selection == -1:
-            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
-            serverBookmarks = bookmarks.get(self.serverName, [])
-            self.items = [
-                [" • Add new bookmark at \"%s\"" % self.lastDir],
-                [" • Edit a bookmark"],
-                [" • Delete a bookmark"]
-            ]
-            for b in serverBookmarks:
-                self.items.append(b)
-            self.show_quick_panel(self.items, self.handle_bookmarks_list)
+            self.list_bookmarks()
         else:
             self.selected = self.itemPaths[selection]
             caption = "Edit bookmark: "
@@ -1333,7 +1298,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.selected,
                 self.handle_bookmark_edit,
                 self.handle_change,
-                self.show_bookmarks
+                self.list_bookmarks
             )
 
     def handle_bookmark_edit(self, text):
@@ -1344,23 +1309,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             serverBookmarks[b] = text
             bookmarks.set(self.serverName, serverBookmarks)
             sublime.save_settings(self.bookmarksSettingsFile)
-        else:
-            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
-            serverBookmarks = bookmarks.get(self.serverName, [])
-        self.items = [
-            [" • Add new bookmark at \"%s\"" % self.lastDir],
-            [" • Edit a bookmark"],
-            [" • Delete a bookmark"]
-        ]
-        for b in serverBookmarks:
-            self.items.append(b)
-        self.show_quick_panel(self.items, self.handle_bookmarks_list)
+        self.list_bookmarks()
 
     def handle_bookmarks_delete(self, selection):
-        if selection == -1:
-            bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
-            serverBookmarks = bookmarks.get(self.serverName, [])
-        else:
+        if selection != -1:
             selected = self.itemPaths[selection]
             bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
             serverBookmarks = bookmarks.get(self.serverName, [])
@@ -1368,28 +1320,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             del serverBookmarks[b]
             bookmarks.set(self.serverName, serverBookmarks)
             sublime.save_settings(self.bookmarksSettingsFile)
-        self.items = [
-            [" • Add new bookmark at \"%s\"" % self.lastDir]
-        ]
-        if len(serverBookmarks) > 0:
-            self.items.append(" • Edit a bookmark")
-            self.items.append(" • Delete a bookmark")
-        for b in serverBookmarks:
-            self.items.append(b)
-        self.show_quick_panel(self.items, self.handle_bookmarks_list)
-
-    def show_bookmarks(self):
-        bookmarks = sublime.load_settings(self.bookmarksSettingsFile)
-        serverBookmarks = bookmarks.get(self.serverName, [])
-        self.items = [
-            [" • Add new bookmark at \"%s\"" % self.lastDir]
-        ]
-        if len(serverBookmarks) > 0:
-            self.items.append(" • Edit a bookmark")
-            self.items.append(" • Delete a bookmark")
-        for b in serverBookmarks:
-            self.items.append(b)
-        self.show_quick_panel(self.items, self.handle_bookmarks_list)
+        self.list_bookmarks()
 
     def handle_new_file(self, fileName):
         if not fileName:
@@ -1417,14 +1348,52 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if not folderName:
             self.show_quick_panel(self.folderOptions, self.handle_folder_options)
         else:
-            cmd = "mkdir \"%s\"" % self.join_path(self.lastDir, folderName)
+            cmd = "mkdir %s" % (
+                self.escape_remote_path(
+                    self.join_path(self.lastDir, folderName)
+                )
+            )
             if not self.run_sftp_command(cmd):
                 return self.command_error(cmd)
-            self.list_directory(self.lastDir, force=True)
+            self.list_directory(self.lastDir, forceReload=True)
             self.lastDir = self.join_path(self.lastDir, folderName)
         self.items = []
         self.add_options_to_items()
         self.show_quick_panel(self.items, self.handle_list)
+
+    def handle_move(self, selection):
+        if selection == -1:
+            self.show_current_path_panel()
+        elif selection == 0:
+            # Move self.selected to self.lastDir
+            cmd = "mv %s %s" % (
+                self.escape_remote_path(self.selected),
+                self.escape_remote_path(self.lastDir.rstrip("/") + "/")
+            )
+            if self.run_ssh_command(cmd):
+                (head, tail) = self.split_path(self.selected)
+                self.list_directory(head, forceReload=True)
+                self.show_current_path_panel(forceReload=True)
+            else:
+                self.list_directory(self.lastDir, foldersOnly=True, skipOptions=True)
+                self.items.insert(0, ".. Up a folder")
+                self.itemPaths.insert(0, "UP")
+                self.items.insert(0, "Move %s to %s/" % (self.moving, self.lastDir))
+                self.itemPaths.insert(0, "MOVE")
+                self.show_quick_panel(self.items, self.handle_move)
+        else:
+            if selection == 1:
+                (head, tail) = self.split_path(self.lastDir)
+                self.lastDir = head
+            else:
+                self.lastDir = self.join_path(
+                    self.lastDir,
+                    self.itemPaths[selection]
+                )
+            self.list_directory(self.lastDir, foldersOnly=True, skipOptions=True)
+            self.items.insert(0, "Move %s to %s/" % (self.moving, self.lastDir))
+            self.itemPaths.insert(0, "MOVE")
+            self.show_quick_panel(self.items, self.handle_move)
 
     def add_options_to_items(self):
         if self.fileInfo:
@@ -1492,10 +1461,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # error message
             self.lastErr = "Error creating local folder"
             return False
-        # TODO ESCAPE FILENAMES!!!!!!!!!!!!!!
         remoteFile = self.join_path(self.lastDir, f)
-        localFile = os.path.join(localFolder, f)
-        cmd = "get %s %s" % (remoteFile, localFile)
+        localFile = os.path.join(localFolder, self.escape_local_path(f))
+        cmd = "get %s %s" % (
+            self.escape_remote_path(remoteFile),
+            self.escape_remote_path(localFile)
+        )
         if not self.run_sftp_command(cmd):
             return self.command_error(cmd)
         # These persist between app reloads. W00T W00T
@@ -1512,7 +1483,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def download_file_to(self, f, destination):
         destFile = os.path.join(
             destination,
-            f
+            self.escape_local_path(f)
         )
         # TODO, why the cd first?
         try:
@@ -1522,19 +1493,24 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         except:
             pass
         if cd:
-            cmd = "cd %s" % self.lastDir
+            cmd = "cd %s" % (
+                self.escape_remote_path(self.lastDir)
+            )
             if not self.run_sftp_command(cmd):
                 return self.error_message("Error downloading %s" % f, True)
-        cmd = "get %s %s" % (f, destFile)
+        cmd = "get %s %s" % (
+            self.escape_remote_path(f),
+            self.escape_remote_path(destFile)
+        )
         if not self.run_sftp_command(cmd):
             return self.error_message("Error downloading %s" % f, True)
         return True
 
-    def list_directory(self, d, dontLoop=False, force=False):
+    def list_directory(self, d, dontLoop=False, forceReload=False, foldersOnly=False, skipOptions=False):
         self.items = []
         self.itemPaths = []
         found = False
-        if not force and self.cat:
+        if not forceReload and self.cat:
             # Display options based on the catalogue and self.lastDir
             try:
                 self.debug("Trying cat for folder \"%s\"" % d)
@@ -1552,9 +1528,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                             fileName = "%s/" % f
                         elif fldr[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FILE:
                             fileName = f
+                            if foldersOnly:
+                                continue
                         else:
                             # A symlink
                             fileName = "%s (Symlink to: %s)" % (f, fldr[f]["/"][self.STAT_KEY_DESTINATION])
+                            if foldersOnly:
+                                continue
                         if self.fileInfo:
                             self.items.append(
                                 [
@@ -1585,30 +1565,45 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 )
             if d[-1] != "/":
                 d += "/"
-            cmd = "ls %s \"%s\"" % (self.lsParams, d)
+            cmd = "ls %s %s" % (self.lsParams, self.escape_remote_path(d))
             if not self.run_ssh_command(cmd):
                 return False
             if "Not a directory" in self.lastOut:
                 # Make sure we have details of the file
                 (head, tail) = self.split_path(d)
-                self.list_directory(head)
+                self.list_directory(
+                    head,
+                    dontLoop=dontLoop,
+                    forceReload=forceReload,
+                    foldersOnly=foldersOnly,
+                    skipOptions=skipOptions
+                )
                 return False
             # Parse the ls and add to the catalogue (but don't save the file)
             self.cat = self.parse_ls(
                 self.cat,
                 "./:\n%s" % (self.lastOut),
-                self.lastDir
+                d
             )
-            return self.list_directory(d, True)
+            dontLoop = True
+            forceReload = False
+            return self.list_directory(
+                d,
+                dontLoop=dontLoop,
+                forceReload=forceReload,
+                foldersOnly=foldersOnly,
+                skipOptions=skipOptions
+            )
         reData = self.window.active_view().settings().get("reData", None)
         if reData and self.serverName == reData["serverName"]:
             reData["browse_path"] = self.lastDir
             self.window.active_view().settings().set("reData", reData)
-        self.add_options_to_items()
+        if not skipOptions:
+            self.add_options_to_items()
         return True
 
-    def show_current_path_panel(self):
-        s = self.list_directory(self.lastDir)
+    def show_current_path_panel(self, forceReload=False, doCat=True):
+        s = self.list_directory(self.lastDir, forceReload=forceReload)
         if not s:
             # error message
             return self.error_message(
@@ -1617,7 +1612,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         else:
             # Show the options
             self.show_quick_panel(self.items, self.handle_list)
-            self.check_cat()
+            if doCat:
+                self.check_cat()
 
     def remove_stats(self, f):
         return False if not f or f == "/" else True
@@ -1753,11 +1749,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
             # We should be at a prompt
             cmd = "cd %s && ls %s -R > %s/%sSub.cat 2>/dev/null; cd %s && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat && echo $((666 + 445));\n" % (
-                self.get_server_setting("cat_path"),
+                self.escape_remote_path(self.get_server_setting("cat_path")),
                 self.lsParams,
-                self.tempPath,
+                self.escape_remote_path(self.tempPath),
                 self.serverName,
-                self.tempPath,
+                self.escape_remote_path(self.tempPath),
                 self.serverName,
                 self.serverName,
                 self.serverName,
@@ -1779,7 +1775,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             passthrough = "%s/%s" % (self.serverName, self.bgCatStep)
 
             # Now grab the file
-            cmd = "get %s %s\n" % (self.remoteCatGzPath, self.localCatGzPath)
+            cmd = "get %s %s" % (
+                self.escape_remote_path(self.remoteCatGzPath),
+                self.escape_remote_path(self.localCatGzPath)
+            )
             self.run_sftp_command(
                 cmd,
                 callback=self.cat_server,
@@ -1795,7 +1794,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             passthrough = "%s/%s" % (self.serverName, self.bgCatStep)
 
             # delete tmp file from server
-            cmd = "del %s\n" % (self.remoteCatGzPath)
+            cmd = "del %s" % (
+                self.escape_remote_path(self.remoteCatGzPath)
+            )
             self.run_sftp_command(
                 cmd,
                 callback=self.cat_server,
@@ -1836,8 +1837,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             f.close()
             self.debug("Catalogued. :)")
             if len(self.sftpThreads) > 1:
+                self.debug("Len of SFTP is %s" % len(self.sftpThreads))
                 self.remove_sftp_thread()
             if len(self.sshThreads) > 1:
+                self.debug("Len of SSH is %s" % len(self.sshThreads))
                 self.remove_ssh_thread()
         self.tidy_cat_process()
 
@@ -2258,9 +2261,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         cmd,
         checkReturn=None,
         listenAttempts=1,
-        timeout=None,
+        timeout=30,
         callback=None,
-        callbackPassthrough=None
+        callbackPassthrough=None,
+        dropResults=False
     ):
         return self.run_remote_command(
             "ssh",
@@ -2269,7 +2273,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             listenAttempts,
             timeout,
             callback,
-            callbackPassthrough
+            callbackPassthrough,
+            dropResults
         )
 
     def run_sftp_command(
@@ -2279,7 +2284,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         listenAttempts=1,
         timeout=30,
         callback=None,
-        callbackPassthrough=None
+        callbackPassthrough=None,
+        dropResults=False
     ):
         return self.run_remote_command(
             "sftp",
@@ -2288,8 +2294,31 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             listenAttempts,
             timeout,
             callback,
-            callbackPassthrough
+            callbackPassthrough,
+            dropResults
         )
+
+    def escape_remote_path(self, path):
+        if " " in path:
+            return '"%s"' % path.replace('"', '""')
+        else:
+            return path.replace('"', '""')
+
+    def escape_local_path(self, path):
+        replacements = [
+            ["<", "{"],
+            [">", "}"],
+            [":", ";"],
+            ["\"", "'"],
+            ["/", "_"],
+            ["\\", "_"],
+            ["|", "_"],
+            ["?", "~"],
+            ["*", "+"]
+        ]
+        for r in replacements:
+            path = path.replace(r[0], r[1])
+        return path
 
     def run_remote_command(
         self,
@@ -2299,7 +2328,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         listenAttempts=1,
         timeout=30,
         callback=None,
-        callbackPassthrough=None
+        callbackPassthrough=None,
+        dropResults=False
     ):
         self.debug("run_remote_command called for %s and cmd: \"%s\"" % (
             appType,
@@ -2313,6 +2343,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         work["cmd"] = cmd
         work["prompt_contains"] = checkReturn
         work["listen_attempts"] = listenAttempts
+        work["drop_results"] = dropResults
         # Generate a unique key to listen for results on
         m = hashlib.md5()
         m.update(("%s%s" % (cmd, str(time.time()))).encode('utf-8'))
@@ -2341,6 +2372,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 ),
                 100
             )
+            return
+        elif dropResults:
             return
         self.lastErr = self.lastOut = ""
         self.debug("....when time becomes a loop.....")

@@ -92,15 +92,16 @@ class RemoteEditConnectionWorker(threading.Thread):
         )
         # Put together the results object and add it to the dict shated with
         # the parent
-        results = {}
-        results["success"] = success
-        results["out"] = self.lastOut
-        results["err"] = self.lastErr
-        # results["failure_reason_id"]
-        self.results[self.work["key"]] = results
+        if not self.work["drop_results"]:
+            results = {}
+            results["success"] = success
+            results["out"] = self.lastOut
+            results["err"] = self.lastErr
+            # results["failure_reason_id"]
+            self.results[self.work["key"]] = results
 
     def stop(self, threadId):
-        self.debug("STOP called for %s, we are %s" % (threadId, self.threadId))
+        self.debug("Stop called for thread %s, we are %s" % (threadId, self.threadId))
         if self.threadId == threadId:
             self.quit = True
             self.close_connection()
@@ -192,16 +193,16 @@ class RemoteEditConnectionWorker(threading.Thread):
             time.sleep(0.01)
         if self.lastOut:
             self.debug(
-                "--------- OUT ---------\n%s\n%s" % (
+                "--------- stdout ---------\n%s\n%s" % (
                     "\n".join(map(self.strip, self.lastOut.split("\n"))),
-                    "-" * 40
+                    "-" * 44
                 )
             )
         if self.lastErr:
             self.debug(
-                "-------- ERROR --------\n%s\n%s" % (
+                "-------- stderr --------\n%s\n%s" % (
                     "\n".join(map(self.strip, self.lastErr.split("\n"))),
-                    "-" * 40
+                    "-" * 44
                 )
             )
 
@@ -225,6 +226,7 @@ class RemoteEditConnectionWorker(threading.Thread):
     def close_connection(self):
         try:
             self.process.terminate()
+            self.process = None
         except:
             pass
 
