@@ -1,3 +1,4 @@
+# coding=utf-8
 import sublime
 import sublime_plugin
 
@@ -13,7 +14,7 @@ class RemoteEditMouseCommand(sublime_plugin.TextCommand):
         if not self.view.settings().get("reResults"):
             return
         serverName = self.view.settings().get("serverName")
-        ## get selected line
+        # Get selected line
         pos = self.view.sel()[0].end()
         result = self.get_result_region(pos)
         line = self.view.substr(sublime.Region(result.a, result.b))

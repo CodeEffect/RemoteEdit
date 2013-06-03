@@ -457,24 +457,34 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             "$(((66666 + 44445) * 1000000 + (333333 * 3)))"
         )
         checkReturn = "111111999999"
-        success = self.run_ssh_command(
+        self.run_ssh_command(
             cmd,
             checkReturn=checkReturn,
-            listenAttempts=2
+            listenAttempts=2,
+            callback=self.grep_callback_1,
+            callbackPassthrough={"local": localPath, "remote": remotePath, "search": search}
         )
-        if not success:
-            return self.command_error(cmd)
+
+    def grep_callback_1(self, results, info):
+        if not results["success"]:
+            return self.error_message("Error searching remote server")
         # Download results
         cmd = "get %s %s" % (
-            self.escape_remote_path(remotePath),
-            self.escape_remote_path(localPath)
+            self.escape_remote_path(info["remote"]),
+            self.escape_remote_path(info["local"])
         )
-        success = self.run_sftp_command(cmd)
-        if not success:
-            return self.command_error(cmd)
+        self.run_sftp_command(
+            cmd,
+            callback=self.grep_callback_2,
+            callbackPassthrough=info
+        )
+
+    def grep_callback_2(self, results, info):
+        if not results["success"]:
+            return self.error_message("Error downloading remote server search")
         # Now delete remote file
         cmd = "del %s" % (
-            self.escape_remote_path(remotePath)
+            self.escape_remote_path(info["remote"])
         )
         self.run_sftp_command(cmd, dropResults=True)
         # Parse returned grep and display the results
@@ -482,8 +492,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.window.run_command(
             "remote_edit_display_search",
             {
-                "search": search,
-                "filePath": localPath,
+                "search": info["search"],
+                "filePath": info["local"],
                 "serverName": self.serverName,
                 "baseDir": self.lastDir
             }
@@ -931,7 +941,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             fileName = self.lastDir
         else:
             fileName = self.join_path(self.lastDir, self.selected)
-        # Chown is not available in psftp
+        # Chown is not available over sftp
         cmd = "chown %s %s" % (
             chown,
             self.escape_remote_path(fileName)
@@ -1539,25 +1549,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             view.run_command("goto_line", {"line": lineNumber})
 
     def download_file_to(self, f, destination):
+        sourceFile = self.join_path(self.lastDir, f)
         destFile = os.path.join(
             destination,
             self.escape_local_path(f)
         )
-        # TODO, why the cd first?
-        try:
-            cd = True
-            if self.psftp["pwd"] == self.lastDir:
-                cd = False
-        except:
-            pass
-        if cd:
-            cmd = "cd %s" % (
-                self.escape_remote_path(self.lastDir)
-            )
-            if not self.run_sftp_command(cmd):
-                return self.error_message("Error downloading %s" % f, True)
         cmd = "get %s %s" % (
-            self.escape_remote_path(f),
+            self.escape_remote_path(sourceFile),
             self.escape_remote_path(destFile)
         )
         if not self.run_sftp_command(cmd):
@@ -2447,7 +2445,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         m.update(("%s%s" % (cmd, str(time.time()))).encode('utf-8'))
         key = m.hexdigest()
         work["key"] = key
-        self.debug("....going on the queue.....")
         if appType == "sftp":
             self.sftpQueue.put(work)
         else:
@@ -2474,7 +2471,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         elif dropResults:
             return
         self.lastErr = self.lastOut = ""
-        self.debug("....when time becomes a loop.....")
         while True:
             if startTime + timeout < time.time():
                 self.debug("Timeout")

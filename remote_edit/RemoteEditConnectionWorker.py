@@ -78,12 +78,19 @@ class RemoteEditConnectionWorker(threading.Thread):
 
     def process_work_and_respond(self):
         # Check to see if we've been told to terminate
-        if "KILL" in self.work:
-            self.stop(self.work["KILL"])
+        if "KILL" in self.work and self.threadId == self.work["KILL"]:
+            self.debug("Stop called for thread %s, we are %s" % (
+                self.work["KILL"],
+                self.threadId
+            ))
+            self.stop()
             return
         # If we're connected to a different server then disconnect
         if self.serverName and self.work["server_name"] != self.serverName:
-            self.debug("Server has changed. Before: %s, After: %s" % (self.serverName, self.work["server_name"]))
+            self.debug("Server has changed. Before: %s, After: %s" % (
+                self.serverName,
+                self.work["server_name"]
+            ))
             self.close_connection()
         # Run the command
         success = self.run_command(
@@ -101,12 +108,10 @@ class RemoteEditConnectionWorker(threading.Thread):
             # results["failure_reason_id"]
             self.results[self.work["key"]] = results
 
-    def stop(self, threadId):
-        self.debug("Stop called for thread %s, we are %s" % (threadId, self.threadId))
-        if self.threadId == threadId:
-            self.quit = True
-            self.close_connection()
-            self.debug("Thread %s has left the building." % threadId)
+    def stop(self):
+        self.quit = True
+        self.close_connection()
+        self.debug("Thread %s has left the building." % self.threadId)
 
     def run_command(self, cmd, checkReturn=None, listenAttempts=1):
         # Record which server we're connected to

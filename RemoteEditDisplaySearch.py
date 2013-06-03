@@ -21,7 +21,7 @@ class RemoteEditDisplaySearchCommand(sublime_plugin.TextCommand):
         files = {}
         inResult = False
         resultsText = []
-        resultsText.append("Searching for \"%s\" on %s\n" % (
+        resultsText.append("Searching for \"%s\" on %s. CTRL + double click to open the result.\n" % (
             search,
             serverName
         ))
@@ -46,20 +46,21 @@ class RemoteEditDisplaySearchCommand(sublime_plugin.TextCommand):
                 fileName = resultMatch.group(1)
             if not inResult and (resultMatch or aroundMatch):
                 inResult = True
-                if aroundMatch.group(1) in files:
+                if aroundMatch and aroundMatch.group(1) in files:
                     resultsText.append("  ..\n")
                 else:
                     resultsText.append("\n%s/%s:\n" % (
                         baseDir.rstrip("/"),
                         fileName
                     ))
-                files[aroundMatch.group(1)] = True
             if aroundMatch:
+                files[aroundMatch.group(1)] = True
                 resultsText.append("  %s%s\n" % (
                     aroundMatch.group(2).ljust(5),
                     aroundMatch.group(3).rstrip()
                 ))
             if resultMatch:
+                files[resultMatch.group(1)] = True
                 matches += 1
                 tmp = resultMatch.group(3).rstrip()
                 rLine = ""
@@ -91,7 +92,7 @@ class RemoteEditDisplaySearchCommand(sublime_plugin.TextCommand):
         results.settings().set("reResults", "SET")
         results.settings().set("serverName", serverName)
         results.set_scratch(True)
-        results.set_name("Find Results on %s. CTRL + double click to open the result." % serverName)
+        results.set_name("Find Results on %s" % serverName)
         newRegion = sublime.Region(1, 0)
         results.set_syntax_file("Packages/Default/Find Results.hidden-tmLanguage")
         results.replace(edit, newRegion, "".join(resultsText))
