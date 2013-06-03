@@ -52,6 +52,11 @@
     // true the list will contain the name, path, permissions, owner, size and
     // last modified time. If false it will just include the file name.
     "show_file_info": ${17:false},
+    // Only use SFTP to talk to the server (no SSH commands). This may be useful
+    // if that is all the access you have to the server or if SSH isn't working
+    // 100% correctly (is possible that some ls command switches are not fully
+    // supported). You will lose: cataloguing, grep, compress, chown, copy.
+    "sftp_only": ${17:false},
 
     // Some operations require the use of a temporary file system (cataloguing,
     // grepping, compressing). By defauly we use /tmp but if you do need to

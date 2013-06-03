@@ -65,7 +65,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     STAT_KEY_MODIFIED = 5
     STAT_KEY_DESTINATION = 6
 
-    # Add links to find command results
     # Make sure temp name is unique
     #
     # per server filename filters, add filters
@@ -76,7 +75,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     #
     # Copy directories to another location / server
     # server remote_path setting as dict + auto add to bookmarks.
-    # Add sftp only option
 
     def run(self, save=None, fileName=None, serverName=None, lineNumber=None):
         # Ensure that the self.servers dict is populated
@@ -1570,6 +1568,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.items = []
         self.itemPaths = []
         found = False
+        sftpMode = self.get_server_setting("sftp_only", False)
         if not forceReload and self.cat:
             # Display options based on the catalogue and self.lastDir
             try:
@@ -1592,7 +1591,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                                 continue
                         else:
                             # A symlink
-                            fileName = "%s (Symlink to: %s)" % (f, fldr[f]["/"][self.STAT_KEY_DESTINATION])
+                            if sftpMode:
+                                fileName = "%s (Symlink)" % (f)
+                            else:
+                                fileName = "%s (Symlink to: %s)" % (f, fldr[f]["/"][self.STAT_KEY_DESTINATION])
                             if foldersOnly:
                                 continue
                         if self.fileInfo:
@@ -1625,9 +1627,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 )
             if d[-1] != "/":
                 d += "/"
-            cmd = "ls %s %s" % (self.lsParams, self.escape_remote_path(d))
-            if not self.run_ssh_command(cmd):
-                return False
+            if self.get_server_setting("sftp_only", False):
+                cmd = "ls %s" % (self.escape_remote_path(d))
+                if not self.run_sftp_command(cmd):
+                    return False
+            else:
+                cmd = "ls %s %s" % (self.lsParams, self.escape_remote_path(d))
+                if not self.run_ssh_command(cmd):
+                    return False
             if "Not a directory" in self.lastOut:
                 # Make sure we have details of the file
                 (head, tail) = self.split_path(d)
@@ -1643,7 +1650,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.cat = self.parse_ls(
                 self.cat,
                 "./:\n%s" % (self.lastOut),
-                d
+                d,
+                sftpMode=sftpMode
             )
             dontLoop = True
             forceReload = False
@@ -1705,6 +1713,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             return
         # If we don't have a catalogue path then see you next tuesday.
         if not self.get_server_setting("cat_path"):
+            return
+        # If we're set for sftp_only then we can't recursively ls
+        if self.get_server_setting("sftp_only"):
             return
 
         # First, see if we've already got a catalogue
@@ -1938,7 +1949,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         catFile.close()
         return cat
 
-    def parse_ls(self, cat, lsData, startAt, users=[], groups=[]):
+    def parse_ls(self, cat, lsData, startAt, users=[], groups=[], sftpMode=False):
         # Build a lookup dict for quickly converting rwxrwxrwx to an integer
         if not self.permsLookup:
             tmp = {}
@@ -2038,7 +2049,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     self.debug("Error parsing ls output at line: \"%s\"" % line)
                 else:
                     cName = line[charsIn1:].strip()
-                    if sl[0][0] == "l" and "->" in cName:
+                    if not sftpMode and sl[0][0] == "l" and "->" in cName:
                         (cName, symlinkDest) = cName.split(" -> ")
                         # If the symlink destination starts with a / then it's
                         # absolute and so no need to calc a path. If not it's
@@ -2112,17 +2123,42 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                         else:
                             self.debug("Error parsing file size in line: %s" % line)
                             s = 0
-                    try:
+                    # If we're in sftp mode then the filename won't necessarily
+                    # be at position X but *will* be the last in the list. Date
+                    # will be either "Month Day Year" or "Month Day HH:MM" (the
+                    # latter for the current year)
+                    if sftpMode:
+                        cName = sl[-1]
+                        if ":" in sl[7]:
+                            dateTime = "%s-%s-%s %s:%s" % (
+                                time.strftime("%Y"),
+                                sl[5],
+                                sl[6],
+                                sl[7][0:2],
+                                sl[7][3:5]
+                            )
+                        else:
+                            dateTime = "%s-%s-%s 00:00" % (
+                                sl[7],
+                                sl[5],
+                                sl[6]
+                            )
                         d = int(time.mktime(time.strptime(
-                            "%s %s" % (sl[5], sl[6]),
-                            "%Y-%m-%d %H:%M"
+                            dateTime,
+                            "%Y-%b-%d %H:%M"
                         )))
-                    except:
-                        self.debug("Can't parse date at line: \"%s\"" % line)
-                        continue
+                    else:
+                        try:
+                            d = int(time.mktime(time.strptime(
+                                "%s %s" % (sl[5], sl[6]),
+                                "%Y-%m-%d %H:%M"
+                            )))
+                        except:
+                            self.debug("Can't parse date at line: \"%s\"" % line)
+                            continue
                     stats = [t, p, u, g, s, d]
                     # If we have a symlink
-                    if t is self.FILE_TYPE_SYMLINK:
+                    if not sftpMode and t is self.FILE_TYPE_SYMLINK:
                         stats.append(symlinkDest)
                     # self.debug("%s: %s" % (cName, str(stats))
                     options[cName] = {}
@@ -2326,6 +2362,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         callbackPassthrough=None,
         dropResults=False
     ):
+        if self.get_server_setting("sftp_only", False):
+            return self.error_message("This method is not supported under sftp_only mode. You may configure this in your server settings file.")
         return self.run_remote_command(
             "ssh",
             cmd,
