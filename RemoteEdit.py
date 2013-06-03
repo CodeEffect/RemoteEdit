@@ -1562,7 +1562,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             return self.error_message("Error downloading %s" % f, True)
         return True
 
-    def list_directory(self, d, dontLoop=False, forceReload=False, foldersOnly=False, skipOptions=False):
+    def list_directory(self, d, dontLoop=False, forceReload=False, foldersOnly=False, skipOptions=False, callback=None, doCat=None):
         self.items = []
         self.itemPaths = []
         found = False
@@ -1625,61 +1625,91 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 )
             if d[-1] != "/":
                 d += "/"
-            if self.get_server_setting("sftp_only", False):
+            callbackPassthrough = {}
+            callbackPassthrough["folder"] = d
+            callbackPassthrough["dontLoop"] = dontLoop
+            callbackPassthrough["forceReload"] = forceReload
+            callbackPassthrough["foldersOnly"] = foldersOnly
+            callbackPassthrough["skipOptions"] = skipOptions
+            callbackPassthrough["sftpMode"] = sftpMode
+            callbackPassthrough["doCat"] = doCat
+            if sftpMode:
                 cmd = "ls %s" % (self.escape_remote_path(d))
-                if not self.run_sftp_command(cmd):
+                if not self.run_sftp_command(cmd, callback=callback, callbackPassthrough=callbackPassthrough):
                     return False
             else:
                 cmd = "ls %s %s" % (self.lsParams, self.escape_remote_path(d))
-                if not self.run_ssh_command(cmd):
+                if not self.run_ssh_command(cmd, callback=callback, callbackPassthrough=callbackPassthrough):
                     return False
-            if "Not a directory" in self.lastOut:
-                # Make sure we have details of the file
-                (head, tail) = self.split_path(d)
-                self.list_directory(
-                    head,
-                    dontLoop=dontLoop,
-                    forceReload=forceReload,
-                    foldersOnly=foldersOnly,
-                    skipOptions=skipOptions
-                )
-                return False
-            # Parse the ls and add to the catalogue (but don't save the file)
-            self.cat = self.parse_ls(
-                self.cat,
-                "./:\n%s" % (self.lastOut),
-                d,
-                sftpMode=sftpMode
-            )
-            dontLoop = True
-            forceReload = False
-            return self.list_directory(
-                d,
-                dontLoop=dontLoop,
-                forceReload=forceReload,
-                foldersOnly=foldersOnly,
-                skipOptions=skipOptions
-            )
+            results = {}
+            results["out"] = self.lastOut
+            results["err"] = self.lastErr
+            results["success"] = True
+            return self.list_directory_callback(results, callbackPassthrough, calledBack=False)
         reData = self.window.active_view().settings().get("reData", None)
         if reData and self.serverName == reData["serverName"]:
             reData["browse_path"] = self.lastDir
             self.window.active_view().settings().set("reData", reData)
         if not skipOptions:
             self.add_options_to_items()
-        return True
-
-    def show_current_path_panel(self, forceReload=False, doCat=True):
-        s = self.list_directory(self.lastDir, forceReload=forceReload)
-        if not s:
-            # error message
-            return self.error_message(
-                "Error changing folder to %s" % self.lastDir
-            )
-        else:
-            # Show the options
+        # Callback set but unused, we just need to display the list
+        if callback:
             self.show_quick_panel(self.items, self.handle_list)
             if doCat:
                 self.check_cat()
+        return True
+
+    def list_directory_callback(self, results, callbackPassthrough=None, calledBack=True):
+        if not results["success"]:
+            return self.error_message("Error listing folder %s" % results["folder"])
+        if "Not a directory" in results["out"]:
+            # Make sure we have details of the file
+            (head, tail) = self.split_path(callbackPassthrough["folder"])
+            self.list_directory(
+                head,
+                dontLoop=callbackPassthrough["dontLoop"],
+                forceReload=callbackPassthrough["forceReload"],
+                foldersOnly=callbackPassthrough["foldersOnly"],
+                skipOptions=callbackPassthrough["skipOptions"]
+            )
+            return False
+        if "Permission denied" in results["out"]:
+            self.error_message("Permission denied when trying to access %s" % callbackPassthrough["folder"])
+            (self.lastDir, tail) = self.split_path(callbackPassthrough["folder"])
+            return self.show_current_path_panel()
+        # Parse the ls and add to the catalogue (but don't save the file)
+        self.cat = self.parse_ls(
+            self.cat,
+            "./:\n%s" % (results["out"]),
+            callbackPassthrough["folder"],
+            sftpMode=callbackPassthrough["sftpMode"]
+        )
+        s = self.list_directory(
+            callbackPassthrough["folder"],
+            dontLoop=True,
+            forceReload=False,
+            foldersOnly=callbackPassthrough["foldersOnly"],
+            skipOptions=callbackPassthrough["skipOptions"]
+        )
+        if not calledBack:
+            return s
+        # Show the options
+        self.show_quick_panel(self.items, self.handle_list)
+        if callbackPassthrough["doCat"]:
+            self.check_cat()
+
+    def show_current_path_panel(self, forceReload=False, doCat=True):
+        self.list_directory(self.lastDir, forceReload=forceReload, callback=self.list_directory_callback, doCat=doCat)
+        # if not s:
+        #     # error message
+        #     return self.error_message(
+        #         "Error changing folder to %s" % self.lastDir
+        #     )
+        # else:
+        #     # Show the options
+        #     self.show_quick_panel(self.items, self.handle_list)
+        #     if doCat:
+        #         self.check_cat()
 
     def remove_stats(self, f):
         return False if not f or f == "/" else True
