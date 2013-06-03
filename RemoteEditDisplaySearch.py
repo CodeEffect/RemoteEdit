@@ -88,8 +88,11 @@ class RemoteEditDisplaySearchCommand(sublime_plugin.TextCommand):
             pass
         # Open a new tab
         results = self.view.window().new_file()
+        results.settings().set("reResults", "SET")
+        results.settings().set("serverName", serverName)
         results.set_scratch(True)
-        results.set_name("Find Results on %s" % serverName)
+        results.set_name("Find Results on %s. CTRL + double click to open the result." % serverName)
         newRegion = sublime.Region(1, 0)
         results.set_syntax_file("Packages/Default/Find Results.hidden-tmLanguage")
         results.replace(edit, newRegion, "".join(resultsText))
+        print(results.settings().get("reResults"), self.view.settings().get("reResults"))

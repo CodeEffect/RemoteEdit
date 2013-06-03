@@ -78,7 +78,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     # server remote_path setting as dict + auto add to bookmarks.
     # Add sftp only option
 
-    def run(self, save=None):
+    def run(self, save=None, fileName=None, serverName=None, lineNumber=None):
         # Ensure that the self.servers dict is populated
         self.load_server_list()
         # Fire up a ssh and sftp thread and queue. Will immediately block the
@@ -92,6 +92,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if save:
             # Save called from external RE events handler class
             self.save(save)
+        elif fileName and serverName and lineNumber:
+            self.serverName = serverName
+            self.server = self.servers[self.serverName]
+            self.download_and_open(fileName, lineNumber=lineNumber)
         elif self.serverName:
             # Fire up the self.serverName server
             self.start_server(self.serverName)
@@ -1497,7 +1501,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             pass
         return localFolder
 
-    def download_and_open(self, f):
+    def download_and_open(self, f, lineNumber=None):
+        if "/" in f:
+            (self.lastDir, f) = self.split_path(f)
         localFolder = self.make_local_folder()
         if not localFolder:
             # error message
@@ -1520,7 +1526,19 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         }
         self.window.open_file(localFile)
         self.window.active_view().settings().set("reData", reData)
+        if lineNumber:
+            self.scroll_to(lineNumber),
         return True
+
+    def scroll_to(self, lineNumber):
+        view = self.window.active_view()
+        if view.is_loading():
+            sublime.set_timeout(
+                lambda: self.scroll_to(lineNumber),
+                50
+            )
+        else:
+            view.run_command("goto_line", {"line": lineNumber})
 
     def download_file_to(self, f, destination):
         destFile = os.path.join(
