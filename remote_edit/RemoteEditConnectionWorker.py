@@ -6,7 +6,7 @@ import os
 import time
 
 
-# Command dict:
+# Command input dict:
 #   work["server_name"] = string server name
 #   work["settings"] = server settings dict
 #   work["cmd"] = command string
@@ -16,7 +16,7 @@ import time
 #       our specified promptContains
 #   work["key"] = uniquely identifying key used to return the result data
 #
-# Return dict:
+# Results return dict:
 #   data["key"] = uniquely identifying key used to return the result data
 #   data["out"] = what stdout spewed
 #   data["err"] = ditto stderr
@@ -55,7 +55,6 @@ class RemoteEditConnectionWorker(threading.Thread):
             self.promptContains = "psftp>"
         else:
             self.promptContains = "$"
-        self.debug("INIT1")
 
     def __del__(self):
         self.quit = True

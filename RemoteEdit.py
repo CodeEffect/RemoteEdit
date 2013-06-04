@@ -22,6 +22,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     movingFrom = None
     servers = {}
     serverName = None
+    fuzzyServer = None
     sshQueue = None
     appResults = {}
     sshThreads = []
@@ -100,13 +101,31 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.server = self.servers[self.serverName]
             self.download_and_open(fileName, lineNumber=lineNumber)
         elif fuzzy:
-            if self.serverName:
+            # Work out which server we're listing
+            self.fuzzyServer = self.get_settings().get(
+                "default_fuzzy_server",
+                self.fuzzyServer
+            )
+            # If nothing set so far then try self.serverName
+            if not self.fuzzyServer:
+                self.fuzzyServer = self.serverName
+            if self.fuzzyServer:
+                self.server = self.servers[self.fuzzyServer]
+                self.serverName = self.fuzzyServer
                 self.items = []
-                catPath = self.get_server_setting("cat_path")
-                self.append_files_from_path(
-                    self.get_file_from_cat(catPath),
-                    catPath
+                if not self.cat or "/" not in self.cat or "loaded" not in self.cat["/"]:
+                    self.check_cat()
+                    if not self.cat or "/" not in self.cat or "loaded" not in self.cat["/"]:
+                        self.error_message("Error loading catalogue. This may be fixed by waiting a few minutes for a new one to be prepared of there may be a more permanent issue. The console should have more information.")
+                fuzzPath = self.get_server_setting(
+                    "fuzzy_path",
+                    self.get_server_setting("cat_path")
                 )
+                self.append_files_from_path(
+                    self.get_file_from_cat(fuzzPath),
+                    fuzzPath
+                )
+                self.show_quick_panel(self.items, self.handle_fuzzy)
             else:
                 self.error_message("No server selected. Please connect and select a default server")
         elif self.serverName:
@@ -229,7 +248,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # TODO: Check the age of the folder / lock
             self.debug("File is being saved already")
             return
-        # TODO: Set a status bar in progress symbol
         remoteFile = self.join_path(
             reData["path"],
             reData["fileName"]
@@ -243,40 +261,64 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 return self.error_message(
                     "Missing connection details for server \"%s\"" % serverName
                 )
+        callbackPassthrough = {}
+        callbackPassthrough["lockFile"] = lockFile
+        callbackPassthrough["viewId"] = id
+        callbackPassthrough["remoteFile"] = remoteFile
+        callbackPassthrough["serverName"] = serverName
+        callbackPassthrough["lockFile"] = lockFile
         # Initiate the save
         cmd = "put %s %s" % (
             self.escape_remote_path(localFile),
             self.escape_remote_path(remoteFile)
         )
-        if not self.run_sftp_command(cmd):
-            self.release_lock(lockFile)
+        self.run_sftp_command(
+            cmd,
+            callback=self.save_callback,
+            callbackPassthrough=callbackPassthrough
+        )
+
+    def save_callback(self, results, callbackPassthrough):
+        self.release_lock(callbackPassthrough["lockFile"])
+        view = self.window.active_view()
+        if view.id() != callbackPassthrough["viewId"]:
+            # Not active at the mo, let's search the open views for it
+            for v in self.window.views():
+                if v.id() == callbackPassthrough["viewId"]:
+                    view = v
+                    break
+        if view.id() != callbackPassthrough["viewId"]:
+            # The view has gone so no point doing anything that touches it
+            view = None
+        if not results["success"]:
             # Mark view as dirty
-            view = self.window.active_view()
-            view.run_command("remote_edit_mark_dirty", {'id': v.id()})
-            return self.command_error(cmd)
+            if view:
+                view.run_command("remote_edit_mark_dirty", {'id': callbackPassthrough["viewId"]})
+            return self.error_message("Error saving remote file %s to %s" % (
+                callbackPassthrough["remoteFile"],
+                callbackPassthrough["serverName"]
+            ))
         # if succeeded then display ok
-        if "permission denied" in self.lastOut:
-            self.release_lock(lockFile)
+        if "permission denied" in results["out"]:
             # Mark view as dirty
-            view = self.window.active_view()
-            view.run_command("remote_edit_mark_dirty", {'id': v.id()})
+            if view:
+                view.run_command("remote_edit_mark_dirty", {'id': callbackPassthrough["viewId"]})
             return self.error_message(
                 "Permission denied when attempting to write file %s to %s" % (
-                    reData["fileName"],
-                    serverName
+                    callbackPassthrough["remoteFile"],
+                    callbackPassthrough["serverName"]
                 )
             )
-        self.release_lock(lockFile)
-        (path, fileName) = self.split_path(remoteFile)
-        reData["remote_save"] = time.time()
-        v.settings().set("reData", reData)
+        (path, fileName) = self.split_path(callbackPassthrough["remoteFile"])
+        if view:
+            reData = view.settings().get("reData", None)
+            reData["remote_save"] = time.time()
+            view.settings().set("reData", reData)
         msg = "File %s saved successfully to server %s" % (
             fileName,
-            serverName
+            callbackPassthrough["serverName"]
         )
-        sublime.status_message(msg)
-        self.debug(msg)
-        # sublime.message_dialog(msg)
+        self.success_message(msg)
 
     def acquire_lock(self, path):
         try:
@@ -438,10 +480,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.start_server(self.serverName, True)
 
     def handle_fuzzy(self, selection):
-        if selection == -1:
-            self.show_current_path_panel()
-        else:
-            (self.lastDir, selected) = self.split_path(self.items[selection][1])
+        if selection != -1:
+            (self.lastDir, selected) = self.split_path(self.items[selection][0])
             self.maintain_or_download(selected)
 
     def handle_grep(self, search):
@@ -641,7 +681,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # rename, chmod, chown, delete
             downloadFolder = os.path.expandvars(
                 self.get_settings().get(
-                    "download_folder",
+                    "default_download_folder",
                     "%UserProfile%\\Downloads"
                 )
             )
@@ -698,7 +738,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # Save file to download folder
             downloadFolder = os.path.expandvars(
                 self.get_settings().get(
-                    "download_folder",
+                    "default_download_folder",
                     "%UserProfile%\\Downloads"
                 )
             )
@@ -816,7 +856,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         fileName = "%s.%s" % (self.split_path(self.lastDir)[1], ext)
         self.items = [
             "When complete download to %s" % (
-                os.path.expandvars(self.get_settings().get("download_folder"))
+                os.path.expandvars(self.get_settings().get("default_download_folder"))
             ),
             "Don't download, leave on server at %s" % self.join_path(
                 self.lastDir,
@@ -882,7 +922,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.debug("Successfully compressed folder %s" % callbackPassthrough["folder"])
             if callbackPassthrough["download"]:
                 downloadFolder = os.path.expandvars(
-                    self.get_settings().get("download_folder")
+                    self.get_settings().get("default_download_folder")
                 )
                 localPath = self.join_path(
                     downloadFolder,
@@ -1061,20 +1101,24 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def append_files_from_path(self, fileDict, filePath):
         for f in filter(self.remove_stats, fileDict):
+            # Don't show files / folders if they begin with a dot and showHidden
+            # is not enabled.
             if self.showHidden or (not self.showHidden and f[0] != "."):
+                # If we have a file
                 if fileDict[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FILE:
-                    if f != "/NO_INDEX/":
-                        self.items.append([
-                            self.join_path(filePath, f),
-                            "%s  %s %s %s %s" % (
-                                oct(fileDict[f]["/"][self.STAT_KEY_PERMISSIONS])[2:5],
-                                self.cat["/"]["users"][fileDict[f]["/"][self.STAT_KEY_USER]],
-                                self.cat["/"]["groups"][fileDict[f]["/"][self.STAT_KEY_GROUP]],
-                                "" if fileDict[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER else " %s " % self.display_size(fileDict[f]["/"][self.STAT_KEY_SIZE]),
-                                self.display_time(fileDict[f]["/"][self.STAT_KEY_MODIFIED])
-                            )
-                        ])
+                    self.items.append([
+                        self.join_path(filePath, f),
+                        "%s  %s %s %s %s" % (
+                            oct(fileDict[f]["/"][self.STAT_KEY_PERMISSIONS])[2:5],
+                            self.cat["/"]["users"][fileDict[f]["/"][self.STAT_KEY_USER]],
+                            self.cat["/"]["groups"][fileDict[f]["/"][self.STAT_KEY_GROUP]],
+                            "" if fileDict[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER else " %s " % self.display_size(fileDict[f]["/"][self.STAT_KEY_SIZE]),
+                            self.display_time(fileDict[f]["/"][self.STAT_KEY_MODIFIED])
+                        )
+                    ])
                 else:
+                    # Else, assume a folder and recurse into it
+                    # TODO: Symlinks?
                     self.append_files_from_path(
                         fileDict[f],
                         self.join_path(filePath, f)
@@ -1829,7 +1873,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.list_directory(self.lastDir, forceReload=forceReload, callback=self.list_directory_callback, doCat=doCat)
 
     def remove_stats(self, f):
-        return False if not f or f == "/" else True
+        return False if not f or f == "/" or f == "/NO_INDEX/" else True
 
     def display_time(self, uTime, format="%Y-%m-%d %H:%M"):
         return time.strftime(format, time.localtime(uTime))
@@ -1886,7 +1930,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # Let's see if we're already cataloguing...
             catTimeout = 60 * 3
             if self.bgCat and self.bgCat + catTimeout > time.time():
-                self.debug("Already cat'ing")
+                self.debug("Already cataloguing. No need to restart.")
                 return
             # Use the below flag to indicate we will be cataloguing in the BG
             self.bgCat = time.time()
@@ -1899,10 +1943,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.cat_server()
         elif os.path.exists(self.catFile):
             self.cat = pickle.load(open(self.catFile, "rb"))
-            self.debug("I've reloaded!")
+            # Flag to indicate that a full cat is loaded
+            self.cat["/"]["loaded"] = time.time()
+            self.debug("I've reloaded! Catalogue loaded from disk.")
             self.forceReloadCat = False
         else:
-            # check bgCat for X minx in past, if too long then trigger the
+            # TODO: check bgCat for X minx in past, if too long then trigger the
             # download again
             pass
 
@@ -2064,12 +2110,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # Remove the extra threads
         # TODO: Cleanup local files
         # reset all variables
-        # retry's here
+        # retry's here too
         pass
 
     def create_cat(self, fileName, startAt):
         # Build our catalogue dictionary from one big recursive ls of the root
-        # folder. The structure of the dict will be something like:
+        # (or cat_path) folder. The structure of the dict will be something
+        # like:
         #
         # cat["/"]["server"] = server name
         # cat["/"]["created"] = unixtime created
@@ -2437,6 +2484,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.servers[serverName]["settings"] = self.jsonify(
                     open(self.servers[serverName]["path"]).read()
                 )
+            if len(self.servers) == 1:
+                self.fuzzyServer = serverName
 
     def get_settings(self):
         if not self.settings:
@@ -2512,7 +2561,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         dropResults=False
     ):
         if self.get_server_setting("sftp_only", False):
-            return self.error_message("This method is not supported under sftp_only mode. You may configure this in your server settings file.")
+            return self.error_message("This method is not supported under sftp_only mode. You may enable /disable this setting in your per server settings file.")
         return self.run_remote_command(
             "ssh",
             cmd,
