@@ -1,11 +1,16 @@
 {
 	// The default directory to use when downloading files (not to edit), zipped
 	// files etc.
-	"download_folder": "%UserProfile%\\Downloads",
+	"default_download_folder": "%UserProfile%\\Downloads",
 
 	// Consider the server catalogue file stale after this many hours. We don't
 	// immediately delete it but we update it straight away.
 	"cat_stale_after_hours": 24,
+
+	// Default server. Used for selecting which server to use when the fuzzy
+	// file browsing is triggered (see keymap file). If you only have one
+	// server in your server config directory you do not need to set this.
+	"default_fuzzy_server": "",
 
 	// By default we will prompt if a user selects to edit a file with any of
 	// the below extensions. It's still possible to open them in sublime but
