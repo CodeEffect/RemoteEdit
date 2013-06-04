@@ -48,7 +48,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     plinkPromptComtains = "$"
     psftpPromptContains = "psftp>"
     tempPath = "/tmp"
-    timeout = 30
+    timeout = 60
     FILE_TYPE_FILE = 0
     FILE_TYPE_FOLDER = 1
     FILE_TYPE_SYMLINK = 2
@@ -75,6 +75,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     #
     # Copy directories to another location / server
     # server remote_path setting as dict + auto add to bookmarks.
+    # settings
+    # logging to file + add debug level and allow turning off
+    # configure server settings menu
+    # multiple cat locations
+    # status bar busy
 
     def run(self, save=None, fileName=None, serverName=None, lineNumber=None):
         # Ensure that the self.servers dict is populated
@@ -620,8 +625,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def maintain_or_download(self, selected):
         ext = selected.split(".")[-1]
         if self.browsingMode == "edit" and ext not in self.dontEditExt:
-            if not self.download_and_open(selected):
-                return self.error_message("Error downloading %s" % selected)
+            self.download_and_open(selected)
         else:
             # give options
             # rename, chmod, chown, delete
@@ -651,10 +655,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if selection == -1:
             self.show_current_path_panel()
         elif selection == 0:
-            if not self.download_and_open(self.selected):
-                return sublime.error_message(
-                    "Error connecting to %s" % self.serverName
-                )
+            self.download_and_open(self.selected)
         elif selection == 1:
             # Rename
             caption = "Rename to: "
@@ -691,15 +692,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     "%UserProfile%\\Downloads"
                 )
             )
-            if not self.download_file_to(self.selected, downloadFolder):
-                return self.error_message("Error downloading %s" % self.selected)
-            if selection == 5:
-                # And open
-                f = os.path.join(
-                    downloadFolder,
-                    self.selected
-                )
-                os.startfile(f)
+            self.download_file_to(self.selected, downloadFolder, bool(selection == 5))
         elif selection == 6:
             # Zip
             items = [
@@ -764,16 +757,37 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.escape_remote_path(oldPath),
                 self.escape_remote_path(newPath)
             )
-            if not self.run_sftp_command(cmd):
-                return self.command_error(cmd)
-            else:
-                if self.selected is -1:
-                    self.lastDir = newPath
-                f = self.get_file_from_cat(head)
-                f[fileName] = f[tail]
-                del f[tail]
-            self.list_directory(self.lastDir)
-        self.show_quick_panel(self.items, self.handle_list)
+            callbackPassthrough = {}
+            callbackPassthrough["oldName"] = tail
+            callbackPassthrough["parentFolder"] = head
+            callbackPassthrough["newName"] = fileName
+            callbackPassthrough["oldPath"] = oldPath
+            callbackPassthrough["newPath"] = newPath
+            callbackPassthrough["selected"] = self.selected
+            callbackPassthrough["lastDir"] = self.lastDir
+            self.run_sftp_command(cmd, callback=self.rename_callback, callbackPassthrough=callbackPassthrough)
+        else:
+            self.show_quick_panel(self.items, self.handle_list)
+
+    def rename_callback(self, results, callbackPassthrough):
+        if results["success"]:
+            self.success_message("File %s renamed to %s" % (
+                callbackPassthrough["oldName"],
+                callbackPassthrough["newName"]
+            ))
+        else:
+            self.error_message("Error renaming file %s to %s" % (
+                callbackPassthrough["oldName"],
+                callbackPassthrough["newName"]
+            ))
+        if callbackPassthrough["selected"] is -1:
+            self.lastDir = callbackPassthrough["newPath"]
+        else:
+            self.lastDir = callbackPassthrough["lastDir"]
+        f = self.get_file_from_cat(callbackPassthrough["parentFolder"])
+        f[callbackPassthrough["newName"]] = f[callbackPassthrough["oldName"]]
+        del f[callbackPassthrough["oldName"]]
+        self.show_current_path_panel()
 
     def handle_compress(self, selection):
         if selection == -1:
@@ -835,61 +849,51 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.selected
         )
         checkReturn = "111111"
-        success = self.run_ssh_command(
+        callbackPassthrough = {}
+        callbackPassthrough["ext"] = ext
+        callbackPassthrough["folder"] = self.lastDir
+        callbackPassthrough["download"] = download
+        callbackPassthrough["fileName"] = fileName
+        callbackPassthrough["compressTo"] = compressTo
+        self.run_ssh_command(
             cmd,
             checkReturn=checkReturn,
-            listenAttempts=2
+            listenAttempts=2,
+            callback=self.compress_callback_1,
+            callbackPassthrough=callbackPassthrough
         )
-        if not success:
-            self.debug("Error compressing folder %s" % self.lastDir)
-            self.error_message("Error compressing \"%s\"" % self.lastDir)
-            self.list_directory(self.lastDir)
+
+    def compress_callback_1(self, results, callbackPassthrough):
+        if not results["success"]:
+            self.debug("Error compressing folder %s" % callbackPassthrough["folder"])
+            self.error_message("Error compressing \"%s\"" % callbackPassthrough["folder"])
+            self.list_directory(callbackPassthrough["folder"])
         else:
-            self.debug("Successfully compressed folder %s" % self.lastDir)
-            if download:
+            self.debug("Successfully compressed folder %s" % callbackPassthrough["folder"])
+            if callbackPassthrough["download"]:
                 downloadFolder = os.path.expandvars(
                     self.get_settings().get("download_folder")
                 )
                 localPath = self.join_path(
                     downloadFolder,
-                    fileName
+                    callbackPassthrough["fileName"]
                 )
+                callbackPassthrough["downloadFolder"] = downloadFolder
+                callbackPassthrough["localPath"] = localPath
                 cmd = "get %s %s" % (
-                    self.escape_remote_path(compressTo),
+                    self.escape_remote_path(callbackPassthrough["compressTo"]),
                     self.escape_remote_path(localPath)
                 )
-                success = self.run_sftp_command(cmd, listenAttempts=2)
-                if success:
-                    self.debug("Successfully downloaded file %s" % localPath)
-                    sublime.message_dialog("File %s.%s downloaded successfully" % (
-                        os.path.join(
-                            downloadFolder,
-                            self.split_path(self.lastDir)[1]
-                        ),
-                        ext
-                    ))
-                    # Tidy up after ourselves
-                    cmd = "del %s" % (
-                        self.escape_remote_path(compressTo)
-                    )
-                    success = self.run_sftp_command(cmd)
-                    if success:
-                        self.debug("Successfully removed file %s" % compressTo)
-                    else:
-                        self.debug("Error deleting file %s" % compressTo)
-                else:
-                    self.debug("Error downloading file to %s" % localPath)
-                    self.error_message("File compressed successfully but download failed. Your compressed file is at \"%s\"" % compressTo)
-                self.list_directory(self.lastDir)
+                self.run_sftp_command(cmd, listenAttempts=2, callback=self.compress_callback_2, callbackPassthrough=callbackPassthrough)
             else:
                 cmd = "mv %s %s" % (
-                    self.escape_remote_path(compressTo),
+                    self.escape_remote_path(callbackPassthrough["compressTo"]),
                     self.escape_remote_path("%s.%s" % (
                         self.join_path(
-                            self.lastDir,
-                            self.split_path(self.lastDir)[1]
+                            callbackPassthrough["folder"],
+                            self.split_path(callbackPassthrough["folder"])[1]
                         ),
-                        ext
+                        callbackPassthrough["ext"]
                     ))
                 )
                 # For some odd reason psftp fails to move a file from /tmp to
@@ -897,21 +901,38 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 # code 4 back from sftp and the error messsage "failure". This
                 # is on debian stable. Needs more investigation, psftp should be
                 # fine for this simple move operation.
-                success = self.run_ssh_command(cmd)
-                if not success or "failure" in self.lastOut:
-                    self.error_message("Error moving compressed file to %s" % (
-                        self.lastDir
-                    ))
-                self.list_directory(self.lastDir, forceReload=True)
-        self.list_directory(self.lastDir)
-        self.show_quick_panel(self.items, self.handle_list)
+                self.run_ssh_command(cmd, callback=self.compress_callback_3, callbackPassthrough=callbackPassthrough)
+
+    def compress_callback_2(self, results, callbackPassthrough):
+        if not results["success"]:
+            self.debug("Error downloading file %s" % callbackPassthrough["compressTo"])
+            self.error_message("File compressed successfully but download failed. Your compressed file is at \"%s\"" % callbackPassthrough["compressTo"])
+        else:
+            self.debug("Successfully downloaded file %s" % callbackPassthrough["localPath"])
+            self.success_message("File %s downloaded successfully" % (
+                callbackPassthrough["fileName"]
+            ))
+            # Tidy up after ourselves
+            cmd = "del %s" % (
+                self.escape_remote_path(callbackPassthrough["compressTo"])
+            )
+            self.run_sftp_command(cmd, dropResults=True)
+        self.list_directory(callbackPassthrough["folder"])
+
+    def compress_callback_3(self, results, callbackPassthrough):
+        if not results["success"] or "failure" in results["out"]:
+            self.error_message("Error moving compressed file to %s" % (
+                callbackPassthrough["folder"]
+            ))
+            self.show_current_path_panel(callbackPassthrough["folder"], forceReload=True)
+        else:
+            self.show_current_path_panel(callbackPassthrough["folder"])
 
     def handle_chmod(self, chmod):
         if self.selected is -1:
             fileName = self.lastDir
         else:
             fileName = self.join_path(self.lastDir, self.selected)
-            self.debug(fileName, self.lastDir, self.selected)
         chRex = re.compile("^[0-7]{3}$")
         if not re.search(chRex, chmod):
             self.error_message("Invalid chmod value, must be 3 numbers, each with a value from 0 to 7")
@@ -928,13 +949,26 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             chmod,
             self.escape_remote_path(fileName)
         )
-        success = self.run_sftp_command(cmd)
-        if not success:
-            return self.command_error(cmd)
+        callbackPassthrough = {}
+        callbackPassthrough["fileName"] = fileName
+        callbackPassthrough["chmod"] = chmod
+        self.run_ssh_command(cmd, callback=self.chmod_callback, callbackPassthrough=callbackPassthrough)
+
+    def chmod_callback(self, results, callbackPassthrough):
+        if not results["success"]:
+            self.error_message("Error attempting to chmod %s to %s" % (
+                callbackPassthrough["fileName"],
+                callbackPassthrough["chmod"]
+            ))
+        elif "Operation not permitted" in results["out"]:
+            self.error_message("You do not have permission to chmod %s to %s" % (
+                callbackPassthrough["fileName"],
+                callbackPassthrough["chmod"]
+            ))
         else:
-            f = self.get_file_from_cat(fileName)
-            f["/"][self.STAT_KEY_PERMISSIONS] = int(str(chmod), 8)
-            self.show_quick_panel(self.items, self.handle_list)
+            f = self.get_file_from_cat(callbackPassthrough["fileName"])
+            f["/"][self.STAT_KEY_PERMISSIONS] = int(str(callbackPassthrough["chmod"]), 8)
+        self.show_current_path_panel()
 
     def handle_chown(self, chown):
         if self.selected is -1:
@@ -946,23 +980,30 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             chown,
             self.escape_remote_path(fileName)
         )
-        if not self.run_ssh_command(cmd):
-            return self.command_error(cmd)
+        callbackPassthrough = {}
+        callbackPassthrough["fileName"] = fileName
+        callbackPassthrough["chown"] = chown
+        self.run_ssh_command(cmd, callback=self.chown_callback, callbackPassthrough=callbackPassthrough)
+
+    def chown_callback(self, results, callbackPassthrough):
+        if not results["success"]:
+            self.error_message("Error attempting to chown %s to %s" % (
+                callbackPassthrough["fileName"],
+                callbackPassthrough["chown"]
+            ))
+        elif "Operation not permitted" in results["out"]:
+            self.error_message("You do not have permission to chown %s to %s" % (
+                callbackPassthrough["fileName"],
+                callbackPassthrough["chown"]
+            ))
         else:
-            if "Operation not permitted" in self.lastOut:
-                self.error_message(
-                    "You do not have permission to chown \"%s\" to \"%s\"" % (
-                        fileName,
-                        chown
-                    )
-                )
-            else:
-                self.list_directory(self.lastDir, forceReload=True)
-            self.show_quick_panel(self.items, self.handle_list)
+            return self.show_current_path_panel(forceReload=True)
+        self.show_current_path_panel()
 
     def show_list(self):
         self.show_quick_panel(self.items, self.handle_list)
 
+    # TODO: Make event driven
     def get_user_and_group(self, filePath):
         user = None
         group = None
@@ -980,6 +1021,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             pass
         return (user, group)
 
+    # TODO: Make event driven
     def get_perms(self, filePath):
         stats = self.get_file_stats(filePath)
         if not stats:
@@ -988,6 +1030,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             stats = self.get_file_stats(filePath)
         return oct(stats[self.STAT_KEY_PERMISSIONS])[2:5]
 
+    # TODO: Make event driven
     def get_file_stats(self, filePath):
         f = self.get_file_from_cat(filePath)
         if not f:
@@ -996,6 +1039,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             f = self.get_file_from_cat(filePath)
         return f["/"]
 
+    # TODO: Make event driven
     def get_file_from_cat(self, filePath):
         tmp = self.cat
         try:
@@ -1016,6 +1060,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                         self.join_path(filePath, f)
                     )
 
+    # TODO: Make event driven
     def handle_navigate(self, path):
         prevDir = self.lastDir
         self.lastDir = path
@@ -1171,7 +1216,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "Delete"
             ):
                 cmd = "rmdir %s" % self.escape_remote_path(self.lastDir)
-                if not self.run_sftp_command(cmd) or "failure" in self.lastOut:
+                # TODO: Error message for permission denied (or has files / folders inside etc)
+                # Also, better error message to user (which one of the above was it)
+                if not self.run_sftp_command(cmd) or "failure" in self.lastOut or "no such file or directory" in self.lastOut:
                     return self.command_error(cmd)
                 self.lastDir = head
                 f = self.get_file_from_cat(self.lastDir)
@@ -1361,21 +1408,44 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.window.active_view().settings().set("reData", reData)
 
     def handle_new_folder(self, folderName):
-        if not folderName:
-            self.show_quick_panel(self.folderOptions, self.handle_folder_options)
-        else:
+        if folderName:
             cmd = "mkdir %s" % (
                 self.escape_remote_path(
                     self.join_path(self.lastDir, folderName)
                 )
             )
-            if not self.run_sftp_command(cmd):
-                return self.command_error(cmd)
-            self.list_directory(self.lastDir, forceReload=True)
-            self.lastDir = self.join_path(self.lastDir, folderName)
-        self.items = []
-        self.add_options_to_items()
-        self.show_quick_panel(self.items, self.handle_list)
+            callbackPassthrough = {}
+            callbackPassthrough["folder"] = folderName
+            callbackPassthrough["path"] = self.lastDir
+            self.run_sftp_command(
+                cmd,
+                callback=self.new_folder_callback,
+                callbackPassthrough=callbackPassthrough
+            )
+        else:
+            self.show_quick_panel(self.items, self.handle_list)
+
+    def new_folder_callback(self, results, callbackPassthrough):
+        if not results["success"]:
+            self.error_message("Error attempting to create folder %s in %s" % (
+                callbackPassthrough["folder"],
+                callbackPassthrough["path"]
+            ))
+        else:
+            # We do this to keep or catalogue up to date, we're not viewing
+            # this list, we're viewing the contents of our new folder (empty)
+            self.list_directory(
+                callbackPassthrough["path"],
+                forceReload=True,
+                callback=self.parse_list_only_callback
+            )
+            self.lastDir = self.join_path(
+                callbackPassthrough["path"],
+                callbackPassthrough["folder"]
+            )
+            self.items = []
+            self.add_options_to_items()
+            self.show_quick_panel(self.items, self.handle_list)
 
     def handle_move(self, selection):
         if selection == -1:
@@ -1523,19 +1593,28 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.escape_remote_path(remoteFile),
             self.escape_remote_path(localFile)
         )
-        if not self.run_sftp_command(cmd):
-            return self.command_error(cmd)
+        callbackPassthrough = {}
+        callbackPassthrough["file"] = f
+        callbackPassthrough["lastDir"] = self.lastDir
+        callbackPassthrough["localFile"] = localFile
+        callbackPassthrough["lineNumber"] = lineNumber
+        callbackPassthrough["serverName"] = self.serverName
+        self.run_sftp_command(cmd, callback=self.download_and_open_callback, callbackPassthrough=callbackPassthrough)
+
+    def download_and_open_callback(self, results, callbackPassthrough):
+        if not results["success"]:
+            return self.error_message("Error downloading %s" % callbackPassthrough["file"])
         # These persist between app reloads. W00T W00T
         reData = {
-            "serverName": self.serverName,
-            "fileName": f,
-            "path": self.lastDir,
+            "serverName": callbackPassthrough["serverName"],
+            "fileName": callbackPassthrough["file"],
+            "path": callbackPassthrough["lastDir"],
             "openedAt": time.time()
         }
-        self.window.open_file(localFile)
+        self.window.open_file(callbackPassthrough["localFile"])
         self.window.active_view().settings().set("reData", reData)
-        if lineNumber:
-            self.scroll_to(lineNumber),
+        if callbackPassthrough["lineNumber"]:
+            self.scroll_to(callbackPassthrough["lineNumber"])
         return True
 
     def scroll_to(self, lineNumber):
@@ -1548,7 +1627,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         else:
             view.run_command("goto_line", {"line": lineNumber})
 
-    def download_file_to(self, f, destination):
+    def download_file_to(self, f, destination, openFile):
         sourceFile = self.join_path(self.lastDir, f)
         destFile = os.path.join(
             destination,
@@ -1558,9 +1637,27 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.escape_remote_path(sourceFile),
             self.escape_remote_path(destFile)
         )
-        if not self.run_sftp_command(cmd):
-            return self.error_message("Error downloading %s" % f, True)
-        return True
+        callbackPassthrough = {}
+        callbackPassthrough["file"] = self.selected
+        callbackPassthrough["open"] = openFile
+        callbackPassthrough["destination"] = destination
+        self.run_sftp_command(cmd, callback=self.download_file_callback, callbackPassthrough=callbackPassthrough)
+
+    def download_file_callback(self, results, callbackPassthrough):
+        if results["success"]:
+            self.success_message("File %s downloaded to %s" % (
+                callbackPassthrough["file"],
+                callbackPassthrough["destination"]
+            ))
+        else:
+            return self.error_message("Error downloading %s" % callbackPassthrough["file"])
+        if callbackPassthrough["open"]:
+            # And open
+            f = os.path.join(
+                callbackPassthrough["destination"],
+                callbackPassthrough["file"]
+            )
+            os.startfile(f)
 
     def list_directory(self, d, dontLoop=False, forceReload=False, foldersOnly=False, skipOptions=False, callback=None, doCat=None):
         self.items = []
@@ -1659,6 +1756,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.check_cat()
         return True
 
+    def parse_list_only_callback(self, results, callbackPassthrough=None):
+        if "Not a directory" not in results["out"] and "Permission denied" not in results["out"]:
+            # Parse the ls and add to the catalogue (but don't save the file)
+            self.cat = self.parse_ls(
+                self.cat,
+                "./:\n%s" % (results["out"]),
+                callbackPassthrough["folder"],
+                sftpMode=callbackPassthrough["sftpMode"]
+            )
+
     def list_directory_callback(self, results, callbackPassthrough=None, calledBack=True):
         if not results["success"]:
             return self.error_message("Error listing folder %s" % results["folder"])
@@ -1700,16 +1807,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def show_current_path_panel(self, forceReload=False, doCat=True):
         self.list_directory(self.lastDir, forceReload=forceReload, callback=self.list_directory_callback, doCat=doCat)
-        # if not s:
-        #     # error message
-        #     return self.error_message(
-        #         "Error changing folder to %s" % self.lastDir
-        #     )
-        # else:
-        #     # Show the options
-        #     self.show_quick_panel(self.items, self.handle_list)
-        #     if doCat:
-        #         self.check_cat()
 
     def remove_stats(self, f):
         return False if not f or f == "/" else True
@@ -2065,10 +2162,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 # As it may contain spaces we cheat to get the file name once
                 # we have hit our "." current directory. Try to make this
                 # fairly robust
-                if name == "." and len(options) is 0:
+                if not charsIn1 and name == "." and len(options) is 0:
                     charsIn1 = line.find("./")
                 # Verify that with the ".." up a dir
-                elif name == ".." and len(options) is 0:
+                elif not charsIn2 and name == ".." and len(options) is 0:
                     charsIn2 = line.find("../")
                 elif len(sl) < 5:
                     # Skip the "Total BYTES" message
@@ -2076,7 +2173,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 elif not charsIn1 or not charsIn2 or charsIn1 != charsIn2:
                     self.debug("Error parsing ls output at line: \"%s\"" % line)
                 else:
-                    cName = line[charsIn1:].strip()
+                    cName = line[charsIn1:].rstrip()
                     if not sftpMode and sl[0][0] == "l" and "->" in cName:
                         (cName, symlinkDest) = cName.split(" -> ")
                         # If the symlink destination starts with a / then it's
@@ -2374,6 +2471,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         sublime.error_message(msg)
         return False
 
+    def success_message(self, msg):
+        sublime.message_dialog(msg)
+        return True
+
     def debug(self, data):
         if len(data) > 3000:
             print("MAIN %s: %s" % (time.strftime("%H:%M:%S"), data[0:3000]))
@@ -2385,7 +2486,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         cmd,
         checkReturn=None,
         listenAttempts=1,
-        timeout=30,
+        timeout=None,
         callback=None,
         callbackPassthrough=None,
         dropResults=False
@@ -2408,7 +2509,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         cmd,
         checkReturn=None,
         listenAttempts=1,
-        timeout=30,
+        timeout=None,
         callback=None,
         callbackPassthrough=None,
         dropResults=False
@@ -2452,7 +2553,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         cmd,
         checkReturn,
         listenAttempts=1,
-        timeout=30,
+        timeout=None,
         callback=None,
         callbackPassthrough=None,
         dropResults=False
