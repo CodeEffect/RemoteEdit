@@ -16,14 +16,11 @@ class RemoteEditEvents(sublime_plugin.EventListener):
 
     def on_pre_close(self, view):
         reData = view.settings().get("reData", None)
-        # print("CLOSING")
         if reData:
-            # print("REDATA")
             filePath = view.file_name()
             tmp = os.path.expandvars("%temp%")
             # Check it has been remotely saved, ok/cancel if not
             if filePath and tmp in filePath and os.path.exists(filePath):
-                # print("IN TEMP")
                 deleteMe = True
                 localSave = 0
                 remoteSave = 0
@@ -63,7 +60,6 @@ class RemoteEditEvents(sublime_plugin.EventListener):
                         time.sleep(1)
                         wait -= 1
                 if deleteMe:
-                    # print("DELETEIT")
                     sublime.set_timeout(
                         lambda: os.remove(filePath),
                         1000
@@ -71,9 +67,9 @@ class RemoteEditEvents(sublime_plugin.EventListener):
                 else:
                     fileName = os.path.split(filePath)[1]
                     sublime.error_message(
-                        "File \"%s\" has unsaved remote modifications. \
-                        You may find a local copy at \"%s\"" % (
-                        fileName,
-                        filePath
-                    ))
+                        "File \"%s\" has unsaved remote modifications. You may find a local copy at \"%s\"" % (
+                            fileName,
+                            filePath
+                        )
+                    )
                     print("ERROR, REMOTE FILE %s UNSAVED" % fileName)
