@@ -1,0 +1,12 @@
+[
+    {
+        "command": "remote_edit",
+        "args": {},
+        "caption": "Remote Edit Start Panel"
+    },
+    {
+        "command": "remote_edit",
+        "args": {"fuzzy": "last_server"},
+        "caption": "Remote Edit Fuzzy File search"
+    },
+]
