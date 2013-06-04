@@ -1,3 +1,4 @@
 [
-    { "keys": ["f5"], "command": "remote_edit" }
+    { "keys": ["f5"], "command": "remote_edit" },
+    { "keys": ["ctrl+shift+f"], "command": "remote_edit", "args": {"fuzzy": "last_server"} }
 ]

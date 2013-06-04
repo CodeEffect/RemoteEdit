@@ -81,7 +81,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     # multiple cat locations
     # status bar busy
 
-    def run(self, save=None, fileName=None, serverName=None, lineNumber=None):
+    def run(self, save=None, fileName=None, serverName=None, lineNumber=None, fuzzy=None):
         # Ensure that the self.servers dict is populated
         self.load_server_list()
         # Fire up a ssh and sftp thread and queue. Will immediately block the
@@ -99,6 +99,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.serverName = serverName
             self.server = self.servers[self.serverName]
             self.download_and_open(fileName, lineNumber=lineNumber)
+        elif fuzzy:
+            if self.serverName:
+                self.items = []
+                catPath = self.get_server_setting("cat_path")
+                self.append_files_from_path(
+                    self.get_file_from_cat(catPath),
+                    catPath
+                )
+            else:
+                self.error_message("No server selected. Please connect and select a default server")
         elif self.serverName:
             # Fire up the self.serverName server
             self.start_server(self.serverName)
@@ -1053,7 +1063,17 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         for f in filter(self.remove_stats, fileDict):
             if self.showHidden or (not self.showHidden and f[0] != "."):
                 if fileDict[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FILE:
-                    self.items.append([f, self.join_path(filePath, f)])
+                    if f != "/NO_INDEX/":
+                        self.items.append([
+                            self.join_path(filePath, f),
+                            "%s  %s %s %s %s" % (
+                                oct(fileDict[f]["/"][self.STAT_KEY_PERMISSIONS])[2:5],
+                                self.cat["/"]["users"][fileDict[f]["/"][self.STAT_KEY_USER]],
+                                self.cat["/"]["groups"][fileDict[f]["/"][self.STAT_KEY_GROUP]],
+                                "" if fileDict[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER else " %s " % self.display_size(fileDict[f]["/"][self.STAT_KEY_SIZE]),
+                                self.display_time(fileDict[f]["/"][self.STAT_KEY_MODIFIED])
+                            )
+                        ])
                 else:
                     self.append_files_from_path(
                         fileDict[f],
@@ -1218,13 +1238,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 cmd = "rmdir %s" % self.escape_remote_path(self.lastDir)
                 # TODO: Error message for permission denied (or has files / folders inside etc)
                 # Also, better error message to user (which one of the above was it)
+                print("Running up that road: %s" % cmd)
                 if not self.run_sftp_command(cmd) or "failure" in self.lastOut or "no such file or directory" in self.lastOut:
                     return self.command_error(cmd)
                 self.lastDir = head
                 f = self.get_file_from_cat(self.lastDir)
                 del f[tail]
-                self.list_directory(self.lastDir)
-            self.show_quick_panel(self.items, self.handle_list)
+            self.show_current_path_panel()
         elif selection == 14:
             if self.orderBy == self.SORT_BY_NAME:
                 self.orderReverse = False if self.orderReverse else True
@@ -1768,7 +1788,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def list_directory_callback(self, results, callbackPassthrough=None, calledBack=True):
         if not results["success"]:
-            return self.error_message("Error listing folder %s" % results["folder"])
+            return self.error_message("Error listing folder %s" % callbackPassthrough["folder"])
         if "Not a directory" in results["out"]:
             # Make sure we have details of the file
             (head, tail) = self.split_path(callbackPassthrough["folder"])
@@ -2619,8 +2639,17 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.lastErr = result["err"]
             return result["success"]
 
-    def handle_callbacks(self, key, expireTime, callback, callbackPassthrough):
+    def handle_callbacks(self, key, expireTime, callback, callbackPassthrough, statusState=0, statusDir=1):
+        before = statusState % 8
+        after = 7 - before
+        if not after:
+            statusDir = -1
+        elif not before:
+            statusDir = 1
+        statusState += statusDir
+        self.window.active_view().set_status("RE", "RemoteEdit [%s=%s]" % (" " * before, " " * after))
         if key in self.appResults:
+            self.window.active_view().set_status("RE", "")
             self.debug("Results found in callback handler, firing the callback")
             results = self.appResults[key]
             del self.appResults[key]
@@ -2629,6 +2658,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             else:
                 callback(results, callbackPassthrough)
         elif time.time() > expireTime:
+            self.window.active_view().set_status("RE", "")
             callback(
                 {"success": False, "out": "", "err": ""},
                 callbackPassthrough
@@ -2639,7 +2669,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     key,
                     expireTime,
                     callback,
-                    callbackPassthrough
+                    callbackPassthrough,
+                    statusState,
+                    statusDir
                 ),
                 100
             )
