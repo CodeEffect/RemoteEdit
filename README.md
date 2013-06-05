@@ -1,23 +1,17 @@
 # Remote Edit #
 
-***THIS SOFTWARE IS CURRENTLY IN DEVELOPMENT, IT IS NOT SAFE TO INSTALL***  
-
 A plugin for Sublime Text 3 for editing files over SFTP.
 
 ## Details ##
 
-***THIS SOFTWARE IS CURRENTLY IN DEVELOPMENT, IT IS NOT SAFE TO INSTALL***  
+This plugin allows you to configure a list of *nix servers and connect to them over SSH / SFTP to edit and manage files. To make browsing and searching the remote servers as fast as possible RemoteEdit caches a local catalogue. The indexing is a 15 to 30 second process that happens in the background after you first connect. Once done you can search the files in the same way you do for local files with CTRL+P in sublime and it's just as fast. Find in files functionality is replicated as well as many other features.
 
-This is the beginnings of an SFTP editing plugin. It currently should not even be 
-considered alpha quality software and is far from complete. The features that it 
-does have currently only work on Windows with ST3. It is filled with debugging 
-messages, feature imcomplete and likely broken in numerous ways.
+## IMPORTANT - Please read ##
+The plugin is very new code that hasn't received a great deal of testing so far. Also, due to its relative infancy the plugin is still under very active development. The code base changes quickly and by large amounts. 
 
-Please do **not** let it near files that you care about :)
+Due to these reasons (and because you should anyway!) Please ensure that you have good backups of any files that you will be working with. **Do not** use this plugin against production environments or anywhere where your uptime matters.
 
 ## Manual installation ##
-
-***THIS SOFTWARE IS CURRENTLY IN DEVELOPMENT, IT IS NOT SAFE TO INSTALL***  
 
 At present the plugin is not in package control so you will need to install manually.
 
@@ -28,14 +22,36 @@ repository:
     git clone git://github.com/CodeEffect/RemoteEdit
 
 ### Manually: ###
-Downoad a zip of the project (click on the zip icon further up the page) and extract
+Download a zip of the project (click on the zip icon further up the github page) and extract
 it into your packages directory (`Preferences` / `Browse Packages…`).
-Go to the "Packages" directory (`Preferences` / `Browse Packages…`). Then clone this
-repository:
+
+### Setting up your first server ###
+Once the plugin is installed just tap `F5` and select the first option `Add a new server`. A new tab will open in sublime that allows you to tab between the various settings. When complete select save and you will be prompted to save the file into the correct directory. 
+
+Once saved, another tap of `F5` should allow you to select your server then browse it. 
+
+## Features ##
+ - List and browse remote files, optionally displaying extended file information such as permissions, owner, size and modified date.
+ - Bookmark frequently used files and folders on a per-server basis.
+ - Open, edit and save the same files seamlessly from within Sublime Text.
+ - Sort file listing by filename, last modified, size
+ - Filter hidden files including VCS metadata
+ - Fast fuzzy file name search that replicates CTRL+P against remote servers.
+ - Search inside files by running a search on the remote server. Results are presented as current CTRL+SHIFT+F results are. CTRL + double click will open the file and take you to the appropriate line.
+ - Create new files and folders. Chmod, chown, rename, delete, move and copy existing ones.
+ - Compress individual files or recursively against whole directories. Zip, bzip, gzip or lzma should all be available if your platform supports them. The compressed file can optionally be scheduled to download after creation.
+ - SFTP only mode with reduced functionality to ensure that you will always be able to connect and edit.
+
+## Known Issues ##
+
+ - Will fail if host key of remote server is not already cached
+ - As SSH is used for some functionality and app versions and command line switches differ there will be many issues with switches not being supported or being different. If you can, please take the time to report any issues that you're having. The more you are able to help out, the better the plugin will become.
+ - The code is undergoing a migration to being fully event driven. This means that at present it is a little untidy and could do with some re-factoring. It also has issues with interrupting the main Sublime thread for the parts that haven't yet been converted to an events based model. PPPPPPP!
 
 ## Default key bindings ##
 
-`f5` - Show the main menu
+`f5` - Show the main menu  
+`ctrl+shift+f5` - Open the fuzzy file name browser
 
 ## License ##
 
