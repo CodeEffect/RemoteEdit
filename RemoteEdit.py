@@ -1256,7 +1256,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def list_options(self):
         self.options = [
-            "> Back to files",
             "> Bookmarks",
             "> Server / List Options",
             "> Folder Options"
@@ -1264,22 +1263,21 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.show_quick_panel(self.options, self.handle_options)
 
     def handle_options(self, selection):
-        if selection == 0 or selection == -1:
+        if selection == -1:
             # Back to prev list
             self.show_current_path_panel()
-        elif selection == 1:
+        elif selection == 0:
             # Bookmarks
             self.list_bookmarks()
-        elif selection == 2:
+        elif selection == 1:
             # Server / List options
             self.list_server_options()
-        elif selection == 3:
+        elif selection == 2:
             # Folder options
             self.list_folder_options()
 
     def list_server_options(self):
         self.serverOptions = [
-            "> Back to options",
             "> Disconnect from server '%s'" % self.serverName,
             "> %s hidden files / folders" % ("Hide" if self.showHidden else "Show"),
             "> Options - Selecting opens immediately%s" % (" [SELECTED]" if self.browsingMode == "edit" else ""),
@@ -1294,36 +1292,36 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.show_quick_panel(self.serverOptions, self.handle_server_options)
 
     def handle_server_options(self, selection):
-        if selection == 0 or selection == -1:
+        if selection == -1:
             # Back to prev list
             self.list_options()
-        elif selection == 1:
+        elif selection == 0:
             # Disconnect from this server
             self.serverName = None
             self.run()
-        elif selection == 2:
+        elif selection == 1:
             # Show / hide hidden files
             self.showHidden = self.showHidden is False
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 3:
+        elif selection == 2:
             # edit mode
             self.browsingMode = "edit"
             self.show_current_path_panel()
-        elif selection == 4:
+        elif selection == 3:
             # maintenance mode
             self.browsingMode = "maintenance"
             self.show_current_path_panel()
-        elif selection == 5:
+        elif selection == 4:
             # Turn on / off extended file / folder info
             self.fileInfo = self.fileInfo is False
             self.show_current_path_panel()
-        elif selection == 6:
+        elif selection == 5:
             # Refresh ls for entire catalogue
             self.bgCat = time.time()
             self.show_quick_panel(self.items, self.handle_list)
             self.cat_server()
-        elif selection == 7:
+        elif selection == 6:
             if self.orderBy == self.SORT_BY_NAME:
                 self.orderReverse = False if self.orderReverse else True
             else:
@@ -1331,7 +1329,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.orderReverse = False
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 8:
+        elif selection == 7:
             if self.orderBy == self.SORT_BY_TYPE:
                 self.orderReverse = False if self.orderReverse else True
             else:
@@ -1339,7 +1337,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.orderReverse = False
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 9:
+        elif selection == 8:
             if self.orderBy == self.SORT_BY_SIZE:
                 self.orderReverse = False if self.orderReverse else True
             else:
@@ -1347,7 +1345,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.orderReverse = True
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 10:
+        elif selection == 9:
             if self.orderBy == self.SORT_BY_MODIFIED:
                 self.orderReverse = False if self.orderReverse else True
             else:
@@ -1362,7 +1360,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def list_folder_options(self):
         (head, tail) = self.split_path(self.lastDir)
         self.folderOptions = [
-            "> Back to options",
             "> Fuzzy file name search in '%s'" % tail,
             "> Search inside files in '%s'" % tail,
             "> Create a new file within '%s'" % tail,
@@ -1380,10 +1377,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.show_quick_panel(self.folderOptions, self.handle_folder_options)
 
     def handle_folder_options(self, selection):
-        if selection == 0 or selection == -1:
+        if selection == -1:
             # Back to prev list
-            self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 1:
+            self.list_options()
+        elif selection == 0:
             # Fuzzy file name from here
             # TODO: ONLY SHOW THIS IF WE HAVE A CATALOGUE
             self.items = []
@@ -1392,7 +1389,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.lastDir
             )
             self.show_quick_panel(self.items, self.handle_fuzzy)
-        elif selection == 2:
+        elif selection == 1:
             # Search within files from here
             caption = "Enter search term: "
             self.show_input_panel(
@@ -1402,7 +1399,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handle_change,
                 self.show_list
             )
-        elif selection == 3:
+        elif selection == 2:
             # New file
             caption = "Enter file name: "
             self.show_input_panel(
@@ -1412,7 +1409,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handle_change,
                 self.show_list
             )
-        elif selection == 4:
+        elif selection == 3:
             # New folder
             caption = "Enter folder name: "
             self.show_input_panel(
@@ -1422,7 +1419,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handle_change,
                 self.show_list
             )
-        elif selection == 5:
+        elif selection == 4:
             # Rename
             caption = "Enter new name: "
             self.selected = -1
@@ -1434,7 +1431,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handle_change,
                 self.show_list
             )
-        elif selection == 6:
+        elif selection == 5:
             # Move
             (self.lastDir, self.selected) = self.split_path(self.lastDir)
             self.movingFrom = self.lastDir.rstrip("/")
@@ -1444,7 +1441,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.items.insert(0, "Showing %s/, select a path to move %s to" % (self.lastDir, self.selected))
             self.itemPaths.insert(0, "MOVE")
             self.show_quick_panel(self.items, self.handle_move)
-        elif selection == 7:
+        elif selection == 6:
             # Copy
             (self.lastDir, self.selected) = self.split_path(self.lastDir)
             self.movingFrom = self.lastDir.rstrip("/")
@@ -1454,7 +1451,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.items.insert(0, "Showing %s/, select a path to copy %s to" % (self.lastDir, self.selected))
             self.itemPaths.insert(0, "COPY")
             self.show_quick_panel(self.items, self.handle_copy)
-        elif selection == 8:
+        elif selection == 7:
             # List folder contents
             self.list_directory(self.lastDir, forceReload=True)
             ls = ""
@@ -1467,7 +1464,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     "contents": ls
                 }
             )
-        elif selection == 9:
+        elif selection == 8:
             # Zip
             (head, tail) = self.split_path(self.lastDir)
             items = [
@@ -1478,7 +1475,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             ]
             self.selected = "."
             self.show_quick_panel(items, self.handle_compress)
-        elif selection == 10:
+        elif selection == 9:
             # chmod
             self.selected = -1
             caption = "chmod to: "
@@ -1490,7 +1487,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handle_change,
                 self.show_list
             )
-        elif selection == 11:
+        elif selection == 10:
             # chown
             self.selected = -1
             caption = "chown to: "
@@ -1502,7 +1499,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.handle_change,
                 self.show_list
             )
-        elif selection == 12:
+        elif selection == 11:
             # delete
             self.selected = -1
             (head, tail) = self.split_path(self.lastDir)
@@ -1519,7 +1516,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     callback=self.delete_folder_callback,
                     callbackPassthrough=callbackPassthrough
                 )
-        elif selection == 13:
+        elif selection == 12:
             # Refresh ls for this folder
             self.show_current_path_panel(forceReload=True)
         else:
@@ -1763,7 +1760,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "Up to %s" % head
             ])
             self.items.insert(0, [
-                "> Options" % self.browsingMode.capitalize(),
+                "> Remote Edit Options (%s mode)" % self.browsingMode.capitalize(),
                 "Manage folder %s or change preferences" % self.lastDir
             ])
             self.items.insert(0, ["%s:%s  " % (
@@ -1772,7 +1769,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             ), self.get_server_setting("host")])
         else:
             self.items.insert(0, " .. Up a folder")
-            self.items.insert(0, "> Options")
+            self.items.insert(0, "> Remote Edit Options (%s mode)" % self.browsingMode.capitalize())
             self.items.insert(0, "%s:%s" % (
                 self.serverName,
                 self.lastDir
