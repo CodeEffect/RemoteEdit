@@ -42,7 +42,7 @@ class RemoteEditEvents(sublime_plugin.EventListener):
                     # currently dirty.
                     view.window().run_command(
                         "remote_edit",
-                        {"save": view.id()}
+                        {"action": "save", "save": view.id()}
                     )
                     # Kick off the save and wait. If not successful display an
                     # error message. Otherwise delete

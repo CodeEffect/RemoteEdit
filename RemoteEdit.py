@@ -66,8 +66,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     STAT_KEY_MODIFIED = 5
     STAT_KEY_DESTINATION = 6
 
-    # Make sure temp name is unique
-    #
     # per server filename filters, add filters
     # filter by file size
     # filter by date modified
@@ -81,8 +79,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     # configure server settings menu
     # multiple cat locations
     # status bar busy
+    # Server health (disks, htop etc) Status bar?
+    # keepalives
+    # server feature detection?
+    # host key not cached
+    # SVN switch etc etc for configured dir's
 
-    def run(self, save=None, fileName=None, serverName=None, lineNumber=None, fuzzy=None):
+    def run(self, fileName=None, serverName=None, lineNumber=None, action=None, save=None):
         # Ensure that the self.servers dict is populated
         self.load_server_list()
         # Fire up a ssh and sftp thread and queue. Will immediately block the
@@ -93,14 +96,18 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.create_ssh_thread()
         if not self.sftpThreads:
             self.create_sftp_thread()
-        if save:
-            # Save called from external RE events handler class
+        # If save was called from the external RE events handler class then save
+        # the file back to the server
+        if action == "save" and save:
             self.save(save)
-        elif fileName and serverName and lineNumber:
-            self.serverName = serverName
-            self.server = self.servers[self.serverName]
-            self.download_and_open(fileName, lineNumber=lineNumber)
-        elif fuzzy:
+        # Tidy up our local temp folder. This should only contain files that are
+        # open but occasionally if a command fails halfway through it doesn't
+        # keep things tidy
+        elif action == "on_app_start":
+            self.tidy_local_tmp_path()
+        # If fuzzy was passed as a command arg then we display the fuzzy file
+        # list from the catalogue
+        elif action == "fuzzy":
             # Work out which server we're listing
             self.fuzzyServer = self.get_settings().get(
                 "default_fuzzy_server",
@@ -128,9 +135,20 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.show_quick_panel(self.items, self.handle_fuzzy)
             else:
                 self.error_message("No server selected. Please connect and select a default server")
+        # Else, if we have a passed filename, server and line number from the
+        # mouse click event handler then a search result has been clicked on.
+        # Download the file and open to edit.
+        elif fileName and serverName and lineNumber:
+            self.serverName = serverName
+            self.server = self.servers[self.serverName]
+            self.download_and_open(fileName, lineNumber=lineNumber)
+        # If we get this far then it's just a request to start normally. If
+        # serverName is set then we can go straight to browsing that server
         elif self.serverName:
             # Fire up the self.serverName server
             self.start_server(self.serverName)
+        # Lastly, no serer has yet been selected, display the server list and
+        # other options
         else:
             # List servers and startup options
             self.items = [name for name in sorted(self.servers)]
@@ -150,6 +168,26 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "Complete new server details to quickly connect in future"
             ])
             self.show_quick_panel(items, self.handle_server_select)
+
+    def load_server_list(self):
+        # Load all files in User/RemoteEdit/Servers folder
+        serverConfigPath = self.get_server_config_path()
+        if not os.path.exists(serverConfigPath):
+            try:
+                os.makedirs(serverConfigPath)
+            except:
+                pass
+        for root, dirs, files in os.walk(serverConfigPath):
+            for filename in fnmatch.filter(files, "*"):
+                serverName = filename[0:filename.rfind(".")]
+                self.servers[serverName] = {}
+                self.servers[serverName]["path"] = os.path.join(root, filename)
+                self.servers[serverName]["settings"] = self.jsonify(
+                    open(self.servers[serverName]["path"]).read()
+                )
+        # If only 1 server found then it ca be our default fuzzy find server
+        if len(self.servers) == 1:
+            self.fuzzyServer = serverName
 
     def create_queues(self):
         # Set up our queues
@@ -606,37 +644,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 fileType = self.FILE_TYPE_FOLDER
             else:
                 # Possibly a symlink, check that first...
-                f = self.get_file_from_cat(self.join_path(self.lastDir, selected))
+                filePath = self.join_path(self.lastDir, selected)
+                f = self.get_file_from_cat(filePath)
                 fileType = f["/"][self.STAT_KEY_TYPE]
             if fileType == self.FILE_TYPE_SYMLINK:
-                # It is a symlink, resolve that to a file or folder:
-                (path, fileType) = self.get_symlink_dest(
-                    f["/"][self.STAT_KEY_DESTINATION]
-                )
-                if fileType is False:
-                    # We don't know where it links to
-                    if path[-1] != "/":
-                        path += "/"
-                    cmd = "ls %s %s" % (
-                        self.escape_remote_path(self.lsParams),
-                        self.escape_remote_path(path)
-                    )
-                    if not self.run_ssh_command(cmd):
-                        return self.command_error(cmd)
-                    # Parse the ls and add to the catalogue (but don't save the file)
-                    if "Not a directory" in self.lastOut:
-                        fileType = self.FILE_TYPE_FILE
-                    else:
-                        fileType = self.FILE_TYPE_FOLDER
-                        self.cat = self.parse_ls(
-                            self.cat,
-                            "./:\n%s" % (self.lastOut),
-                            path
-                        )
-                self.lastDir = path
-                selected = ""
-            self.debug("root: %s, selected: %s" % (self.lastDir, selected))
-            if fileType == self.FILE_TYPE_FILE:
+                self.navigate_to_symlink(filePath, f)
+            elif fileType == self.FILE_TYPE_FILE:
                 self.maintain_or_download(selected)
             elif fileType == self.FILE_TYPE_FOLDER:
                 if selection == 3:
@@ -657,6 +670,106 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             else:
                 # We should never get here!
                 self.error_message("Navigation error!")
+
+    def navigate_to_symlink(self, filePath, fileDict):
+        try:
+            (path, fileType) = self.get_symlink_dest(
+                fileDict["/"][self.STAT_KEY_DESTINATION]
+            )
+        except:
+            # We're likely in SFTP only mode as we should have this info in the
+            # cat otherwise. We'll have to ls it and see what happens
+            fileType = False
+        if fileType == self.FILE_TYPE_FILE:
+            (self.lastDir, self.selected) = self.split_path(path)
+            self.maintain_or_download(path)
+        elif fileType == self.FILE_TYPE_FOLDER:
+            self.lastDir = path
+            self.show_current_path_panel()
+        else:
+            self.navigate_unknown(path)
+
+    def navigate_unknown(self, path):
+        # We don't know where it links to, slap a slash on the end of it and
+        # try to ls it...
+        if path[-1] != "/":
+            path += "/"
+        callbackPassthrough = {}
+        callbackPassthrough["path"] = path
+        callbackPassthrough["prevDir"] = self.lastDir
+        if self.get_server_setting("sftp_only", False):
+            cmd = "ls %s" % (
+                self.escape_remote_path(path)
+            )
+            self.run_sftp_command(
+                cmd,
+                callback=self.unknown_callback_1,
+                callbackPassthrough=callbackPassthrough
+            )
+        else:
+            cmd = "ls %s %s" % (
+                self.lsParams,
+                self.escape_remote_path(path)
+            )
+            self.run_ssh_command(
+                cmd,
+                callback=self.unknown_callback_1,
+                callbackPassthrough=callbackPassthrough
+            )
+
+    def unknown_callback_1(self, results, callbackPassthrough):
+        if not results["success"]:
+            self.lastDir = callbackPassthrough["prevDir"]
+            self.show_current_path_panel()
+            self.error_message("Error navigating to %s" % callbackPassthrough["path"])
+        elif "no such file or directory" in results["out"]:
+            # sftp, either a file or doesn't exist. Do the same but go up a folder...
+            # ls parent, check for file then prevDir or open file
+            if self.get_server_setting("sftp_only", False):
+                (head, tail) = self.split_path(callbackPassthrough["path"])
+                cmd = "ls %s" % (
+                    self.escape_remote_path(head)
+                )
+                self.run_sftp_command(
+                    cmd,
+                    callback=self.unknown_callback_2,
+                    callbackPassthrough=callbackPassthrough
+                )
+            else:
+                # Pretty sure we should never get here as that error message is
+                # from SFTP but if we do then display an error msg and go prevDir
+                self.error_message("Unable to open %s" % callbackPassthrough["path"])
+        elif "Not a directory" in results["out"]:
+            # It's a file.. open it
+            self.maintain_or_download(callbackPassthrough["path"])
+        else:
+            # We should be a folder, parse the ls and add to the catalogue
+            self.cat = self.parse_ls(
+                self.cat,
+                "./:\n%s" % (results["out"]),
+                callbackPassthrough["path"]
+            )
+            self.lastDir = callbackPassthrough["path"]
+            self.show_current_path_panel()
+
+    def unknown_callback_2(self, results, callbackPassthrough):
+        if not results["success"] or "no such file or directory" in results["out"]:
+            self.lastDir = callbackPassthrough["prevDir"]
+            self.show_current_path_panel()
+            return self.error_message("Error navigating to %s" % callbackPassthrough["path"])
+        else:
+            # We can now check for the file / folder with:
+            try:
+                f = self.get_file_from_cat(callbackPassthrough["path"])
+                fileType = f["/"][self.STAT_KEY_TYPE]
+            except:
+                self.lastDir = callbackPassthrough["prevDir"]
+                self.show_current_path_panel()
+                return self.error_message("Error navigating to %s" % callbackPassthrough["path"])
+            if fileType == self.FILE_TYPE_SYMLINK:
+                self.navigate_to_symlink(callbackPassthrough["path"], f)
+            elif fileType == self.FILE_TYPE_FILE:
+                self.maintain_or_download(callbackPassthrough["path"])
 
     def get_symlink_dest(self, path):
         d = self.get_file_from_cat(path)
@@ -782,17 +895,48 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "Are you sure you want to delete %s?" % self.selected,
                 "Delete"
             ):
+                remotePath = self.join_path(self.lastDir, self.selected)
                 cmd = "rm %s" % (
                     self.escape_remote_path(
-                        self.join_path(self.lastDir, self.selected)
+                        remotePath
                     )
                 )
-                if not self.run_sftp_command(cmd) or "failure" in self.lastOut:
-                    return self.command_error(cmd)
-                f = self.get_file_from_cat(self.lastDir)
-                del f[self.selected]
-                self.list_directory(self.lastDir)
-            self.show_quick_panel(self.items, self.handle_list)
+                callbackPassthrough = {}
+                callbackPassthrough["fileName"] = self.selected
+                callbackPassthrough["fileDirectoryPath"] = self.lastDir
+                self.run_sftp_command(
+                    cmd,
+                    callback=self.delete_file_callback,
+                    callbackPassthrough=callbackPassthrough
+                )
+
+    def delete_file_callback(self, results, callbackPassthrough):
+        if not results["success"] or ": OK" not in results["out"]:
+            if "permission denied" in results["out"]:
+                return self.error_message(
+                    "Permission denied error when trying to delete file %s" % callbackPassthrough["fileName"]
+                )
+            return self.error_message(
+                "Error deleting file %s" % callbackPassthrough["fileName"]
+            )
+        f = self.get_file_from_cat(callbackPassthrough["fileDirectoryPath"])
+        del f[self.selected]
+        self.lastDir = callbackPassthrough["fileDirectoryPath"]
+        self.show_current_path_panel()
+
+    def delete_folder_callback(self, results, callbackPassthrough):
+        if not results["success"] or ": OK" not in results["out"]:
+            if "permission denied" in results["out"]:
+                return self.error_message(
+                    "Permission denied error when trying to delete folder %s" % callbackPassthrough["folderName"]
+                )
+            return self.error_message(
+                "Error deleting folder %s. Make sure it is empty first" % callbackPassthrough["folderName"]
+            )
+        f = self.get_file_from_cat(callbackPassthrough["folderDirectoryPath"])
+        del f[self.selected]
+        self.lastDir = callbackPassthrough["folderDirectoryPath"]
+        self.show_current_path_panel()
 
     def handle_rename(self, fileName):
         if self.selected is -1:
@@ -1124,25 +1268,19 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                         self.join_path(filePath, f)
                     )
 
-    # TODO: Make event driven
     def handle_navigate(self, path):
-        prevDir = self.lastDir
-        self.lastDir = path
-        s = self.list_directory(path)
         f = self.get_file_from_cat(path)
-        if not s and not f:
-            # Error message
-            sublime.error_message(
-                "Path \"%s\" not found" % path
-            )
-            self.lastDir = prevDir
-            self.list_directory(path)
-            return self.show_quick_panel(self.items, self.handle_list)
-        # Show the options
-        if f and "/" in f and f["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FILE:
-            (self.lastDir, selected) = self.split_path(path)
-            return self.maintain_or_download(selected)
-        self.show_quick_panel(self.items, self.handle_list)
+        if f and "/" in f:
+            if f["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_SYMLINK:
+                self.navigate_to_symlink(path, f)
+            elif f["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FILE:
+                (self.lastDir, selected) = self.split_path(path)
+                self.maintain_or_download(selected)
+            elif f["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER:
+                self.lastDir = path
+                self.show_current_path_panel()
+        else:
+            self.navigate_unknown(path)
 
     def handle_folder_options(self, selection):
         if selection == 0 or selection == -1:
@@ -1280,15 +1418,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "Delete"
             ):
                 cmd = "rmdir %s" % self.escape_remote_path(self.lastDir)
-                # TODO: Error message for permission denied (or has files / folders inside etc)
-                # Also, better error message to user (which one of the above was it)
-                print("Running up that road: %s" % cmd)
-                if not self.run_sftp_command(cmd) or "failure" in self.lastOut or "no such file or directory" in self.lastOut:
-                    return self.command_error(cmd)
-                self.lastDir = head
-                f = self.get_file_from_cat(self.lastDir)
-                del f[tail]
-            self.show_current_path_panel()
+                callbackPassthrough = {}
+                callbackPassthrough["folderName"] = tail
+                callbackPassthrough["folderDirectoryPath"] = head
+                self.run_sftp_command(
+                    cmd,
+                    callback=self.delete_folder_callback,
+                    callbackPassthrough=callbackPassthrough
+                )
         elif selection == 14:
             if self.orderBy == self.SORT_BY_NAME:
                 self.orderReverse = False if self.orderReverse else True
@@ -1329,22 +1466,18 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         elif selection == 19:
             # edit mode
             self.browsingMode = "edit"
-            self.list_directory(self.lastDir)
-            self.show_quick_panel(self.items, self.handle_list)
+            self.show_current_path_panel()
         elif selection == 20:
             # maintenance mode
             self.browsingMode = "maintenance"
-            self.list_directory(self.lastDir)
-            self.show_quick_panel(self.items, self.handle_list)
+            self.show_current_path_panel()
         elif selection == 21:
             # Turn on / off extended file / folder info
             self.fileInfo = self.fileInfo is False
-            self.list_directory(self.lastDir)
-            self.show_quick_panel(self.items, self.handle_list)
+            self.show_current_path_panel()
         elif selection == 22:
             # Refresh ls for this folder
-            self.list_directory(self.lastDir, forceReload=True)
-            self.show_quick_panel(self.items, self.handle_list)
+            self.show_current_path_panel(forceReload=True)
         elif selection == 23:
             # Refresh ls for entire catalogue
             self.bgCat = time.time()
@@ -1616,7 +1749,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.itemPaths.insert(0, "here")
 
     def get_local_tmp_path(self, includeServer=True):
-        # TODO: Make this not clash!!!
         if includeServer:
             return os.path.join(
                 os.path.expandvars("%temp%"),
@@ -1627,6 +1759,58 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             os.path.expandvars("%temp%"),
             "RemoteEdit"
         )
+
+    def tidy_local_tmp_path(self, timeout=0.3, ignoreIfTouchedWithin=3600 * 10):
+        # We set a timeout so as not to block the main thread for too long. It's
+        # set relativey high at .3 of a second as a normal run takes under .002
+        # at the very most so it's there as a last resort rather than something
+        # that really needs to be worried about.
+        startAt = time.time()
+        expireAt = time.time() + timeout
+        # First we gather what we have open. As only 1 sublime can run at once
+        # we're safe to delete anything else. By default we leave anything
+        # touched within the last 10 hours (10 * 3600 seconds)
+        oldIfTouchedBefore = time.time() - ignoreIfTouchedWithin
+        openFiles = []
+        rootPath = self.get_local_tmp_path(False)
+        if "\\Temp\\" not in rootPath:
+            # Sanity check on the path as we really, really don't want this to
+            # start looping through the wrong directory deleting files as it goes
+            return self.error_message("tidy_local_tmp_path() detected that \"Temp\" was not in the \"%TEMP%\" path string and exited early. Please investigate.")
+        for v in self.window.views():
+            if v.settings().get("reData", None):
+                openFiles.append(v.file_name())
+        # Now let's go over the filesystem
+        # We do the folders after everything else and we need to reverse them
+        # so bung them in a list on first pass through
+        folders = []
+        for root, dirs, files in os.walk(rootPath):
+            # files first...
+            for f in files:
+                fullPath = os.path.join(root, f)
+                if fullPath not in openFiles:
+                    if os.path.getmtime(fullPath) < oldIfTouchedBefore:
+                        os.remove(fullPath)
+                        self.debug("Deleting file: %s " % (fullPath))
+            # Now directories
+            for d in dirs:
+                fullPath = os.path.join(root, d)
+                folders.append(fullPath)
+            # Check to see if we're past our timeout
+            if expireAt < time.time():
+                self.debug("tidy_local_tmp_path() is out of time, we took: %s seconds" % (time.time() - startAt))
+                return
+        folders.reverse()
+        for d in folders:
+            if expireAt < time.time():
+                self.debug("tidy_local_tmp_path() is out of time, we took: %s seconds" % (time.time() - startAt))
+                return
+            try:
+                os.rmdir(d)
+                self.debug("Deleting empty folder: %s" % d)
+            except:
+                pass
+        self.debug("tidy_local_tmp_path() finished in %s seconds" % (time.time() - startAt))
 
     def make_local_folder(self):
         # file selected, ensure local folder is available
@@ -2134,7 +2318,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # [3] - key of group dict to convert this id to a string group name
         # [4] - filesize in bytes
         # [5] - date as unixtime
-        # [6] - if symlink then note where it links to
+        # [6] - if it's a symlink then record the full destination path
         cat = {}
         catFile = open(fileName, "r", encoding="utf-8", errors="ignore")
         cat = self.parse_ls(cat, catFile.read(), startAt)
@@ -2468,25 +2652,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             "Cats"
         )
 
-    def load_server_list(self):
-        # Load all files in User/RemoteEdit/Servers folder
-        serverConfigPath = self.get_server_config_path()
-        if not os.path.exists(serverConfigPath):
-            try:
-                os.makedirs(serverConfigPath)
-            except:
-                pass
-        for root, dirs, files in os.walk(serverConfigPath):
-            for filename in fnmatch.filter(files, "*"):
-                serverName = filename[0:filename.rfind(".")]
-                self.servers[serverName] = {}
-                self.servers[serverName]["path"] = os.path.join(root, filename)
-                self.servers[serverName]["settings"] = self.jsonify(
-                    open(self.servers[serverName]["path"]).read()
-                )
-            if len(self.servers) == 1:
-                self.fuzzyServer = serverName
-
     def get_settings(self):
         if not self.settings:
             self.settings = sublime.load_settings(self.settingFile)
@@ -2524,15 +2689,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             path = path + "/"
         newPath = "%s%s" % (path, folder)
         return newPath.rstrip("/")
-
-    def command_error(self, cmd):
-        sublime.error_message(
-            "Command \"%s\" failed on %s" % (
-                cmd,
-                self.serverName
-            )
-        )
-        return False
 
     def error_message(self, msg, useLastError=False):
         if useLastError and self.lastErr:
@@ -2724,3 +2880,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 ),
                 100
             )
+
+
+def plugin_loaded():
+    sublime.active_window().run_command(
+        "remote_edit",
+        {"action": "on_app_start"}
+    )
