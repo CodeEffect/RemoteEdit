@@ -352,11 +352,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             reData = view.settings().get("reData", None)
             reData["remote_save"] = time.time()
             view.settings().set("reData", reData)
-        msg = "File %s saved successfully to server %s" % (
-            fileName,
-            callbackPassthrough["serverName"]
-        )
-        self.success_message(msg)
 
     def acquire_lock(self, path):
         try:

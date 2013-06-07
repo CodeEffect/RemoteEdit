@@ -12,7 +12,12 @@ class RemoteEditEvents(sublime_plugin.EventListener):
         if reData:
             reData["local_save"] = time.time()
             view.settings().set("reData", reData)
-            view.window().run_command("remote_edit", {"save": view.id()})
+            view.window().run_command(
+                "remote_edit", {
+                    "action": "save",
+                    "save": view.id()
+                }
+            )
 
     def on_pre_close(self, view):
         reData = view.settings().get("reData", None)
