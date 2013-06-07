@@ -118,10 +118,13 @@ class RemoteEditConnectionWorker(threading.Thread):
         # If checkReturn is overridden on a per command basis then it only
         # applies to the self.write_command() call. We will still need to look
         # for the standard prompt text after we connect to the server.
-        promptContains = self.get_server_setting(
-            "prompt_contains",
-            self.promptContains
-        )
+        if self.appType == "ssh":
+            promptContains = self.get_server_setting(
+                "prompt_contains",
+                self.promptContains
+            )
+        else:
+            promptContains = self.promptContains
         if checkReturn is None:
             checkReturn = promptContains
         if not self.connect(promptContains):
