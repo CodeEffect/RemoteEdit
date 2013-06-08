@@ -1,15 +1,15 @@
 # Remote Edit #
 
-A plugin for Sublime Text 3 for editing files over SFTP.
+A plugin for Sublime Text 3 for editing files over SFTP. Currently windows only.
 
 ## Details ##
 
-This plugin allows you to configure a list of *nix servers and connect to them over SSH / SFTP to edit and manage files. To make browsing and searching the remote servers as fast as possible RemoteEdit caches a local catalogue. The indexing is a 15 to 30 second process that happens in the background after you first connect. Once done you can search the files in the same way you do for local files with CTRL+P in sublime and it's just as fast. Find in files functionality is replicated as well as many other features.
+This plugin allows you to configure a list of *nix servers and connect to them over SSH / SFTP to edit and manage files. To make browsing and searching as fast as possible the plugin creates a local cache of the files you're working on, this allows fuzzy file name searching of your server in the same way that CTRL+P works against your local files. The plugin also allows you to search for text in remote files and presents the results in the same way that CTRL+SHIFT+F does.
 
 ## IMPORTANT - Please read ##
-The plugin is very new code that hasn't received a great deal of testing so far. Also, due to its relative infancy the plugin is still under very active development. The code base changes quickly and by large amounts.
+The plugin is very new code that hasn't received a great deal of testing. Due to its relative infancy the plugin is still under very active development. The code base changes quickly and by large amounts.
 
-Due to these reasons (and because you should anyway!) Please ensure that you have good backups of any files that you will be working with. **Do not** use this plugin against production environments or anywhere where your uptime matters.
+Because of this (and because you should anyway!) please ensure that you have good backups of any files that you will be working with. **Do not** use this plugin against production environments or anywhere where your uptime matters.
 
 ## Manual installation ##
 
@@ -47,7 +47,6 @@ Once saved, another tap of `F5` should allow you to select your server then brow
  - It totally spanks your .bash_history with ls's
  - Will fail if host key of remote server is not already cached
  - As SSH is used for some functionality and app versions and command line switches differ there will be many issues with switches not being supported or being different. If you can, please take the time to report any issues that you're having. The more you are able to help out, the better the plugin will become.
- - The code is undergoing a migration to being fully event driven. This means that at present it is a little untidy and could do with some re-factoring. It also has issues with interrupting the main Sublime thread for the parts that haven't yet been converted to an events based model. PPPPPPP!
 
 ## Default key bindings ##
 
