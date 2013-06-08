@@ -121,9 +121,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.server = self.servers[self.fuzzyServer]
                 self.serverName = self.fuzzyServer
                 self.items = []
-                if not self.cat or "/DATA/" not in self.cat or "loaded" not in self.cat["/DATA/"]:
+                if not self.cat or "/CAT_DATA/" not in self.cat or "loaded" not in self.cat["/CAT_DATA/"]:
                     self.check_cat()
-                    if not self.cat or "/DATA/" not in self.cat or "loaded" not in self.cat["/DATA/"]:
+                    if not self.cat or "/CAT_DATA/" not in self.cat or "loaded" not in self.cat["/CAT_DATA/"]:
                         self.error_message("Error loading catalogue. This may be fixed by waiting a few minutes for a new one to be prepared of there may be a more permanent issue. The console should have more information.")
                 fuzzPath = self.get_server_setting(
                     "fuzzy_path",
@@ -613,6 +613,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 # Possibly a symlink, check that first...
                 filePath = self.join_path(self.lastDir, selected)
                 f = self.get_file_from_cat(filePath)
+                # If we've loaded a new cat since listing this folder
+                if not f or "/" not in f:
+                    return self.navigate_unknown(filePath)
                 fileType = f["/"][self.STAT_KEY_TYPE]
             if fileType == self.FILE_TYPE_SYMLINK:
                 self.navigate_to_symlink(filePath, f)
@@ -1174,8 +1177,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.list_directory(head)
             stats = self.get_file_stats(filePath)
         try:
-            user = self.cat["/DATA/"]["users"][stats[self.STAT_KEY_USER]]
-            group = self.cat["/DATA/"]["groups"][stats[self.STAT_KEY_GROUP]]
+            user = self.cat["/CAT_DATA/"]["users"][stats[self.STAT_KEY_USER]]
+            group = self.cat["/CAT_DATA/"]["groups"][stats[self.STAT_KEY_GROUP]]
         except:
             user = "UNKNOWN"
             group = "UNKNOWN"
@@ -1221,8 +1224,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                         self.join_path(filePath, f),
                         "%s  %s %s %s %s" % (
                             oct(fileDict[f]["/"][self.STAT_KEY_PERMISSIONS])[2:5],
-                            self.cat["/DATA/"]["users"][fileDict[f]["/"][self.STAT_KEY_USER]],
-                            self.cat["/DATA/"]["groups"][fileDict[f]["/"][self.STAT_KEY_GROUP]],
+                            self.cat["/CAT_DATA/"]["users"][fileDict[f]["/"][self.STAT_KEY_USER]],
+                            self.cat["/CAT_DATA/"]["groups"][fileDict[f]["/"][self.STAT_KEY_GROUP]],
                             "" if fileDict[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER else " %s " % self.display_size(fileDict[f]["/"][self.STAT_KEY_SIZE]),
                             self.display_time(fileDict[f]["/"][self.STAT_KEY_MODIFIED])
                         )
@@ -1372,7 +1375,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             "» Rename folder '%s'" % tail,
             "» Move folder '%s'" % tail,
             "» Copy folder '%s'" % tail,
-            "» List folder '%s' contents" % tail,
+            "» Open new tab with '%s' contents" % tail,
             "» Zip contents of '%s' (and optionally download)" % tail,
             "» Chmod '%s'" % tail,
             "» Chown '%s'" % tail,
@@ -1990,8 +1993,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                                     "  %s" % fileName,
                                     "  %s  %s %s %s %s" % (
                                         oct(fldr[f]["/"][self.STAT_KEY_PERMISSIONS])[2:5],
-                                        self.cat["/DATA/"]["users"][fldr[f]["/"][self.STAT_KEY_USER]],
-                                        self.cat["/DATA/"]["groups"][fldr[f]["/"][self.STAT_KEY_GROUP]],
+                                        self.cat["/CAT_DATA/"]["users"][fldr[f]["/"][self.STAT_KEY_USER]],
+                                        self.cat["/CAT_DATA/"]["groups"][fldr[f]["/"][self.STAT_KEY_GROUP]],
                                         "" if fldr[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER else " %s " % self.display_size(fldr[f]["/"][self.STAT_KEY_SIZE]),
                                         self.display_time(fldr[f]["/"][self.STAT_KEY_MODIFIED])
                                     )
@@ -2101,7 +2104,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.list_directory(self.lastDir, forceReload=forceReload, callback=self.list_directory_callback, doCat=doCat)
 
     def remove_stats(self, f):
-        return False if not f or f == "/" or f == "/NO_INDEX/" or f == "/DATA/" else True
+        return False if not f or "/" in f else True
 
     def display_time(self, uTime, format="%Y-%m-%d %H:%M"):
         return time.strftime(format, time.localtime(uTime))
@@ -2334,7 +2337,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if os.path.exists(self.catFile):
             self.cat = pickle.load(open(self.catFile, "rb"))
             # Flag to indicate that a full cat is loaded
-            self.cat["/DATA/"]["loaded"] = time.time()
+            self.cat["/CAT_DATA/"]["loaded"] = time.time()
             self.debug("I've reloaded! Catalogue loaded from disk.")
             self.forceReloadCat = False
 
@@ -2350,11 +2353,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # (or cat_path) folder. The structure of the dict will be something
         # like:
         #
-        # cat["/DATA/"]["server"] = server name
-        # cat["/DATA/"]["created"] = unixtime created
-        # cat["/DATA/"]["updated"] = unixtime updated
-        # cat["/DATA/"]["users"] = users dict int -> user name
-        # cat["/DATA/"]["groups"] = groups dict int -> group name
+        # cat["/CAT_DATA/"]["server"] = server name
+        # cat["/CAT_DATA/"]["created"] = unixtime created
+        # cat["/CAT_DATA/"]["updated"] = unixtime updated
+        # cat["/CAT_DATA/"]["users"] = users dict int -> user name
+        # cat["/CAT_DATA/"]["groups"] = groups dict int -> group name
         # cat["folder1"]["/"] = [list of stat info on folder 1]
         # cat["folder1"]["folder2"]["/"] = [list of stat info on folder 2]
         # cat["folder1"]["file1"]["/"] = [list of stat info on file 1]
@@ -2395,14 +2398,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                                 tmp[y],
                                 tmp[z]
                             ), 8)
-        if "/DATA/" in cat and "users" in cat["/DATA/"]:
-            users = cat["/DATA/"]["users"]
-            groups = cat["/DATA/"]["groups"]
+        if "/CAT_DATA/" in cat and "users" in cat["/CAT_DATA/"]:
+            users = cat["/CAT_DATA/"]["users"]
+            groups = cat["/CAT_DATA/"]["groups"]
         tmpCat = cat
         tmpStartCat = cat
         for f in filter(bool, startAt.split('/')):
             if f not in tmpStartCat:
-                tmpStartCat[f] = {}
+                tmpStartCat[f] = {"/NO_INDEX/": True}
             tmpStartCat = tmpStartCat[f]
         f_f_fresh = False
         cdStats = None
@@ -2431,7 +2434,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 tmpCat = tmpStartCat
                 for f in filter(bool, key.split('/')):
                     if f not in tmpCat:
-                        tmpCat[f] = {}
+                        tmpCat[f] = {"/NO_INDEX/": True}
                     tmpCat = tmpCat[f]
                 # Remove files that have been deleted since last cat
                 toDel = []
@@ -2607,7 +2610,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         tmpCat = tmpStartCat
         for f in filter(bool, key.split('/')):
             if f not in tmpCat:
-                tmpCat[f] = {}
+                tmpCat[f] = {"/NO_INDEX/": True}
             tmpCat = tmpCat[f]
         # Remove files that have been deleted since last cat
         toDel = []
@@ -2626,14 +2629,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         except:
             pass
         # add user and group shizzle
-        if "/DATA/" not in cat:
-            cat["/DATA/"] = {}
-        cat["/DATA/"]["server"] = self.serverName
-        if "created" not in cat["/DATA/"]:
-            cat["/DATA/"]["created"] = int(time.time())
-        cat["/DATA/"]["updated"] = int(time.time())
-        cat["/DATA/"]["users"] = users
-        cat["/DATA/"]["groups"] = groups
+        if "/CAT_DATA/" not in cat:
+            cat["/CAT_DATA/"] = {}
+        cat["/CAT_DATA/"]["server"] = self.serverName
+        if "created" not in cat["/CAT_DATA/"]:
+            cat["/CAT_DATA/"]["created"] = int(time.time())
+        cat["/CAT_DATA/"]["updated"] = int(time.time())
+        cat["/CAT_DATA/"]["users"] = users
+        cat["/CAT_DATA/"]["groups"] = groups
         return cat
 
     def up_dir_to_path(self, symlinkDest, prepend):
