@@ -54,6 +54,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     FILE_TYPE_FOLDER = 1
     FILE_TYPE_SYMLINK = 2
     SORT_BY_NAME = 10
+    SORT_BY_EXT = 11
     # Folders then files
     SORT_BY_TYPE = 0
     SORT_BY_SIZE = 4
@@ -120,9 +121,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.server = self.servers[self.fuzzyServer]
                 self.serverName = self.fuzzyServer
                 self.items = []
-                if not self.cat or "/" not in self.cat or "loaded" not in self.cat["/"]:
+                if not self.cat or "/DATA/" not in self.cat or "loaded" not in self.cat["/DATA/"]:
                     self.check_cat()
-                    if not self.cat or "/" not in self.cat or "loaded" not in self.cat["/"]:
+                    if not self.cat or "/DATA/" not in self.cat or "loaded" not in self.cat["/DATA/"]:
                         self.error_message("Error loading catalogue. This may be fixed by waiting a few minutes for a new one to be prepared of there may be a more permanent issue. The console should have more information.")
                 fuzzPath = self.get_server_setting(
                     "fuzzy_path",
@@ -153,8 +154,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # List servers and startup options
             self.items = [name for name in sorted(self.servers)]
             items = [[
-                "%s (%s)" % (name, self.servers[name]["settings"]["host"]),
-                "User: %s, Path: %s" % (
+                "  %s (%s)" % (name, self.servers[name]["settings"]["host"]),
+                "  User: %s, Path: %s" % (
                     self.servers[name]["settings"]["user"],
                     self.servers[name]["settings"]["remote_path"]
                 )
@@ -611,7 +612,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             else:
                 # Possibly a symlink, check that first...
                 filePath = self.join_path(self.lastDir, selected)
-                print(filePath)
                 f = self.get_file_from_cat(filePath)
                 fileType = f["/"][self.STAT_KEY_TYPE]
             if fileType == self.FILE_TYPE_SYMLINK:
@@ -800,7 +800,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # Move
             self.movingFrom = self.lastDir
             self.list_directory(self.lastDir, skipOptions=True, foldersOnly=True)
-            self.items.insert(0, ".. Up a folder")
+            self.items.insert(0, "../")
             self.itemPaths.insert(0, "UP")
             self.items.insert(0, "Showing %s/, select a path to move %s to" % (self.lastDir, self.selected))
             self.itemPaths.insert(0, "MOVE")
@@ -809,7 +809,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # Copy
             self.movingFrom = self.lastDir
             self.list_directory(self.lastDir, skipOptions=True, foldersOnly=True)
-            self.items.insert(0, ".. Up a folder")
+            self.items.insert(0, "../")
             self.itemPaths.insert(0, "UP")
             self.items.insert(0, "Showing %s/, select a path to copy %s to" % (self.lastDir, self.selected))
             self.itemPaths.insert(0, "COPY")
@@ -901,7 +901,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "Error deleting folder %s. Make sure it is empty first" % callbackPassthrough["folderName"]
             )
         f = self.get_file_from_cat(callbackPassthrough["folderDirectoryPath"])
-        del f[self.selected]
+        del f[callbackPassthrough["folderName"]]
         self.lastDir = callbackPassthrough["folderDirectoryPath"]
         self.show_current_path_panel()
 
@@ -1174,8 +1174,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.list_directory(head)
             stats = self.get_file_stats(filePath)
         try:
-            user = self.cat["/"]["users"][stats[self.STAT_KEY_USER]]
-            group = self.cat["/"]["groups"][stats[self.STAT_KEY_GROUP]]
+            user = self.cat["/DATA/"]["users"][stats[self.STAT_KEY_USER]]
+            group = self.cat["/DATA/"]["groups"][stats[self.STAT_KEY_GROUP]]
         except:
             user = "UNKNOWN"
             group = "UNKNOWN"
@@ -1221,8 +1221,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                         self.join_path(filePath, f),
                         "%s  %s %s %s %s" % (
                             oct(fileDict[f]["/"][self.STAT_KEY_PERMISSIONS])[2:5],
-                            self.cat["/"]["users"][fileDict[f]["/"][self.STAT_KEY_USER]],
-                            self.cat["/"]["groups"][fileDict[f]["/"][self.STAT_KEY_GROUP]],
+                            self.cat["/DATA/"]["users"][fileDict[f]["/"][self.STAT_KEY_USER]],
+                            self.cat["/DATA/"]["groups"][fileDict[f]["/"][self.STAT_KEY_GROUP]],
                             "" if fileDict[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER else " %s " % self.display_size(fileDict[f]["/"][self.STAT_KEY_SIZE]),
                             self.display_time(fileDict[f]["/"][self.STAT_KEY_MODIFIED])
                         )
@@ -1279,6 +1279,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             "» Options - Selecting opens immediately%s" % (" [SELECTED]" if self.browsingMode == "edit" else ""),
             "» Options - Selecting shows maintenance menu%s" % (" [SELECTED]" if self.browsingMode == "maintenance" else ""),
             "» Sort by filename %s" % ("descending" if self.orderBy == self.SORT_BY_NAME and not self.orderReverse else "ascending"),
+            "» Sort by extension %s" % ("descending" if self.orderBy == self.SORT_BY_EXT and not self.orderReverse else "ascending"),
             "» Sort by type (file/folder) %s" % ("- folders first" if self.orderBy == self.SORT_BY_TYPE and not self.orderReverse else "- files first"),
             "» Sort by size %s" % ("ascending" if self.orderBy == self.SORT_BY_SIZE and self.orderReverse else "descending"),
             "» Sort by last modified %s" % ("descending" if self.orderBy == self.SORT_BY_MODIFIED and not self.orderReverse else "ascending"),
@@ -1321,6 +1322,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
         elif selection == 6:
+            if self.orderBy == self.SORT_BY_EXT:
+                self.orderReverse = False if self.orderReverse else True
+            else:
+                self.orderBy = self.SORT_BY_EXT
+                self.orderReverse = False
+            self.list_directory(self.lastDir)
+            self.show_quick_panel(self.items, self.handle_list)
+        elif selection == 7:
             if self.orderBy == self.SORT_BY_TYPE:
                 self.orderReverse = False if self.orderReverse else True
             else:
@@ -1328,7 +1337,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.orderReverse = False
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 7:
+        elif selection == 8:
             if self.orderBy == self.SORT_BY_SIZE:
                 self.orderReverse = False if self.orderReverse else True
             else:
@@ -1336,7 +1345,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.orderReverse = True
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 8:
+        elif selection == 9:
             if self.orderBy == self.SORT_BY_MODIFIED:
                 self.orderReverse = False if self.orderReverse else True
             else:
@@ -1344,7 +1353,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.orderReverse = False
             self.list_directory(self.lastDir)
             self.show_quick_panel(self.items, self.handle_list)
-        elif selection == 9:
+        elif selection == 10:
             # Refresh ls for entire catalogue
             self.bgCat = time.time()
             self.show_quick_panel(self.items, self.handle_list)
@@ -1433,7 +1442,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             (self.lastDir, self.selected) = self.split_path(self.lastDir)
             self.movingFrom = self.lastDir.rstrip("/")
             self.list_directory(self.lastDir, skipOptions=True, foldersOnly=True)
-            self.items.insert(0, ".. Up a folder")
+            self.items.insert(0, "../")
             self.itemPaths.insert(0, "UP")
             self.items.insert(0, "Showing %s/, select a path to move %s to" % (self.lastDir, self.selected))
             self.itemPaths.insert(0, "MOVE")
@@ -1443,7 +1452,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             (self.lastDir, self.selected) = self.split_path(self.lastDir)
             self.movingFrom = self.lastDir.rstrip("/")
             self.list_directory(self.lastDir, skipOptions=True, foldersOnly=True)
-            self.items.insert(0, ".. Up a folder")
+            self.items.insert(0, "../")
             self.itemPaths.insert(0, "UP")
             self.items.insert(0, "Showing %s/, select a path to copy %s to" % (self.lastDir, self.selected))
             self.itemPaths.insert(0, "COPY")
@@ -1706,7 +1715,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     self.itemPaths[selection]
                 )
         self.list_directory(self.lastDir, foldersOnly=True, skipOptions=True)
-        self.items.insert(0, ".. Up a folder")
+        self.items.insert(0, "../")
         self.itemPaths.insert(0, "UP")
         if self.movingFrom == self.lastDir:
             self.items.insert(0, "Showing %s/, select a path to move %s to" % (self.lastDir, self.selected))
@@ -1742,7 +1751,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     self.itemPaths[selection]
                 )
         self.list_directory(self.lastDir, foldersOnly=True, skipOptions=True)
-        self.items.insert(0, ".. Up a folder")
+        self.items.insert(0, "../")
         self.itemPaths.insert(0, "UP")
         if self.movingFrom == self.lastDir:
             self.items.insert(0, "Showing %s/, select a path to copy %s to" % (self.lastDir, self.selected))
@@ -1755,8 +1764,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if self.fileInfo:
             (head, tail) = self.split_path(self.lastDir)
             self.items.insert(0, [
-                " .. Up a folder",
-                "Up to %s" % head
+                "  ../",
+                "  Up to %s" % head
             ])
             self.items.insert(0, [
                 "» Options - %s mode - sort by %s" % (
@@ -1765,17 +1774,17 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 ),
                 "Manage folder %s or change preferences" % self.lastDir
             ])
-            self.items.insert(0, ["%s:%s  " % (
+            self.items.insert(0, ["» %s:%s  " % (
                 self.serverName,
                 self.lastDir
             ), self.get_server_setting("host")])
         else:
-            self.items.insert(0, " .. Up a folder")
+            self.items.insert(0, "  ../")
             self.items.insert(0, "» Options - %s mode - sort by %s" % (
                 self.browsingMode,
                 self.order_by_to_string()
             ))
-            self.items.insert(0, "%s:%s" % (
+            self.items.insert(0, "» %s:%s" % (
                 self.serverName,
                 self.lastDir
             ))
@@ -1958,7 +1967,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     raise Exception("Path not in catalogue")
                 # self.debug("D is: %s" % d)
                 # self.debug("Fldr is: %s" % fldr)
-                for f in sorted(filter(self.remove_stats, fldr), reverse=self.orderReverse, key=lambda x: fldr[x]["/"][self.orderBy] if self.orderBy != self.SORT_BY_NAME else x.lower()):
+                for f in sorted(filter(self.remove_stats, fldr), reverse=self.orderReverse, key=lambda x: fldr[x]["/"][self.orderBy] if self.orderBy != self.SORT_BY_NAME and self.orderBy != self.SORT_BY_EXT else (x.lower() if self.orderBy == self.SORT_BY_NAME else (x.split(".")[-1] if "." in x else "zzzzzz" + x))):
                     # self.debug("F is: %s" % f)
                     if self.showHidden or (not self.showHidden and f[0] != "."):
                         if fldr[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER:
@@ -1978,11 +1987,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                         if self.fileInfo:
                             self.items.append(
                                 [
-                                    fileName,
-                                    "%s  %s %s %s %s" % (
+                                    "  %s" % fileName,
+                                    "  %s  %s %s %s %s" % (
                                         oct(fldr[f]["/"][self.STAT_KEY_PERMISSIONS])[2:5],
-                                        self.cat["/"]["users"][fldr[f]["/"][self.STAT_KEY_USER]],
-                                        self.cat["/"]["groups"][fldr[f]["/"][self.STAT_KEY_GROUP]],
+                                        self.cat["/DATA/"]["users"][fldr[f]["/"][self.STAT_KEY_USER]],
+                                        self.cat["/DATA/"]["groups"][fldr[f]["/"][self.STAT_KEY_GROUP]],
                                         "" if fldr[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER else " %s " % self.display_size(fldr[f]["/"][self.STAT_KEY_SIZE]),
                                         self.display_time(fldr[f]["/"][self.STAT_KEY_MODIFIED])
                                     )
@@ -1990,7 +1999,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                             )
                         else:
                             # self.debug("Key: %s, Val: %s" % (f, fldr[f]))
-                            self.items.append(fileName)
+                            self.items.append("  %s" % fileName)
                         self.itemPaths.append(f)
             except Exception as e:
                 self.debug("\"%s\" not in catalogue. Exception: %s" % (d, e))
@@ -2092,7 +2101,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.list_directory(self.lastDir, forceReload=forceReload, callback=self.list_directory_callback, doCat=doCat)
 
     def remove_stats(self, f):
-        return False if not f or f == "/" or f == "/NO_INDEX/" else True
+        return False if not f or f == "/" or f == "/NO_INDEX/" or f == "/DATA/" else True
 
     def display_time(self, uTime, format="%Y-%m-%d %H:%M"):
         return time.strftime(format, time.localtime(uTime))
@@ -2160,29 +2169,21 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # self.create_sftp_thread()
             ## GO!
             self.cat_server()
-        elif os.path.exists(self.catFile):
-            self.cat = pickle.load(open(self.catFile, "rb"))
-            # Flag to indicate that a full cat is loaded
-            self.cat["/"]["loaded"] = time.time()
-            self.debug("I've reloaded! Catalogue loaded from disk.")
-            self.forceReloadCat = False
-        else:
-            # TODO: check bgCat for X minx in past, if too long then trigger the
-            # download again
-            pass
+        self.load_cat()
+        # TODO: check bgCat for X minx in past, if too long then trigger the
+        # download again
 
     def cat_server(self, result=None, cp=None):
         # TODO set a flag for known hosts after first connect
         # if the flag is set we can punt the plink query straight into the
         # background thread without worrying about known hosts
-        if cp:
-            (resultServer, resultStep) = cp.split("/")
-        else:
+        if not cp:
             self.bgCatStep = 0
-            resultServer = self.serverName
-            resultStep = 0
+            cp = {}
+            cp["server"] = self.serverName
+            cp["step"] = 0
         self.debug("Cat server called for %s, step is %s" % (
-            resultServer,
+            cp["server"],
             self.bgCatStep
         ))
 
@@ -2190,29 +2191,22 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # Put in some retrys
         # Make individual bits callable manually (refresh from... etc)
 
-        if resultServer != self.serverName:
+        if cp["server"] != self.serverName:
             return self.tidy_cat_process()
 
         # STEP 1
         if self.bgCatStep is 0:
             # TODO, Much better error messages
             self.bgCatStep += 1
-            passthrough = "%s/%s" % (self.serverName, self.bgCatStep)
+            cp["server"] = self.serverName
+            cp["step"] = self.bgCatStep
 
             self.catFile = os.path.join(
                 self.get_cat_path(),
                 "%s.cat" % self.serverName
             )
-            self.localCatFolder = self.get_local_tmp_path()
-            self.catFileName = "%sSub.tar.gz" % self.serverName
-            self.remoteCatGzPath = "%s/%s" % (self.tempPath, self.catFileName)
-            self.localCatGzPath = os.path.join(
-                self.localCatFolder,
-                self.catFileName
-            )
-
             try:
-                os.makedirs(self.localCatFolder)
+                os.makedirs(self.get_local_tmp_path())
             except FileExistsError:
                 # Directory already exists
                 pass
@@ -2245,70 +2239,80 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 checkReturn="1111",
                 listenAttempts=10,
                 callback=self.cat_server,
-                callbackPassthrough=passthrough
+                callbackPassthrough=cp
             )
         elif self.bgCatStep is 1:
-            if resultStep is not "1":
+            if cp["step"] is not 1:
                 return self.tidy_cat_process()
             if not result["success"]:
                 return self.tidy_cat_process()
             self.bgCatStep += 1
-            passthrough = "%s/%s" % (self.serverName, self.bgCatStep)
-
+            cp["server"] = self.serverName
+            cp["step"] = self.bgCatStep
+            cp["remoteCatGzPath"] = "%s/%s" % (self.tempPath, "%sSub.tar.gz" % self.serverName)
+            cp["localCatGzPath"] = os.path.join(
+                self.get_local_tmp_path(),
+                "%sSub.tar.gz" % self.serverName
+            )
             # Now grab the file
             cmd = "get %s %s" % (
-                self.escape_remote_path(self.remoteCatGzPath),
-                self.escape_remote_path(self.localCatGzPath)
+                self.escape_remote_path(cp["remoteCatGzPath"]),
+                self.escape_remote_path(cp["localCatGzPath"])
             )
             self.run_sftp_command(
                 cmd,
                 callback=self.cat_server,
-                callbackPassthrough=passthrough
+                callbackPassthrough=cp
             )
 
         elif self.bgCatStep is 2:
-            if resultStep is not "2":
+            if cp["step"] is not 2:
                 return self.tidy_cat_process()
             if not result["success"]:
                 return self.tidy_cat_process()
             self.bgCatStep += 1
-            passthrough = "%s/%s" % (self.serverName, self.bgCatStep)
+            cp["server"] = self.serverName
+            cp["step"] = self.bgCatStep
 
             # delete tmp file from server
             cmd = "del %s" % (
-                self.escape_remote_path(self.remoteCatGzPath)
+                self.escape_remote_path(cp["remoteCatGzPath"])
             )
             self.run_sftp_command(
                 cmd,
                 callback=self.cat_server,
-                callbackPassthrough=passthrough
+                callbackPassthrough=cp
             )
         elif self.bgCatStep is 3:
             # split this one up more
-            if resultStep is not "3":
+            if cp["step"] is not 3:
                 return self.tidy_cat_process()
             if not result["success"]:
                 return self.tidy_cat_process()
+            self.bgCatStep += 1
+            cp["server"] = self.serverName
+            cp["step"] = self.bgCatStep
 
             # Check local file exists
             try:
-                f = tarfile.open(self.localCatGzPath, "r:gz")
-                f.extractall(self.localCatFolder)
-                f.close()
+                f = tarfile.open(cp["localCatGzPath"], "r:gz")
+                f.extractall(self.get_local_tmp_path())
             except Exception as e:
                 self.debug("Gzip fail: \"%s\"" % e)
                 return False
-            catDataFile = os.path.join(
-                self.localCatFolder,
+            finally:
+                f.close()
+            lsDataFile = os.path.join(
+                self.get_local_tmp_path(),
                 "%sSub.cat" % self.serverName
             )
             cat = self.create_cat(
-                catDataFile,
+                lsDataFile,
                 self.get_server_setting("cat_path")
             )
             # Delete the local files we downloaded and untarred
-            os.remove(self.localCatGzPath)
-            os.remove(catDataFile)
+            os.remove(cp["localCatGzPath"])
+            os.remove(lsDataFile)
             # Save our python dict catalogue by pickleing it in some tangy,
             # slightly sweet, pickling vinegar.
             f = open(self.catFile, "wb")
@@ -2323,25 +2327,34 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             if len(self.sshThreads) > 1:
                 self.debug("Len of SSH is %s" % len(self.sshThreads))
                 self.remove_ssh_thread()
-        self.tidy_cat_process()
+            # Now load it!
+            self.load_cat()
+
+    def load_cat(self):
+        if os.path.exists(self.catFile):
+            self.cat = pickle.load(open(self.catFile, "rb"))
+            # Flag to indicate that a full cat is loaded
+            self.cat["/DATA/"]["loaded"] = time.time()
+            self.debug("I've reloaded! Catalogue loaded from disk.")
+            self.forceReloadCat = False
 
     def tidy_cat_process(self, resultServer=None):
         # Remove the extra threads
         # TODO: Cleanup local files
         # reset all variables
         # retry's here too
-        pass
+        self.debug("Tidy")
 
     def create_cat(self, fileName, startAt):
         # Build our catalogue dictionary from one big recursive ls of the root
         # (or cat_path) folder. The structure of the dict will be something
         # like:
         #
-        # cat["/"]["server"] = server name
-        # cat["/"]["created"] = unixtime created
-        # cat["/"]["updated"] = unixtime updated
-        # cat["/"]["users"] = users dict int -> user name
-        # cat["/"]["groups"] = groups dict int -> group name
+        # cat["/DATA/"]["server"] = server name
+        # cat["/DATA/"]["created"] = unixtime created
+        # cat["/DATA/"]["updated"] = unixtime updated
+        # cat["/DATA/"]["users"] = users dict int -> user name
+        # cat["/DATA/"]["groups"] = groups dict int -> group name
         # cat["folder1"]["/"] = [list of stat info on folder 1]
         # cat["folder1"]["folder2"]["/"] = [list of stat info on folder 2]
         # cat["folder1"]["file1"]["/"] = [list of stat info on file 1]
@@ -2382,9 +2395,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                                 tmp[y],
                                 tmp[z]
                             ), 8)
-        if "/" in cat and "users" in cat["/"]:
-            users = cat["/"]["users"]
-            groups = cat["/"]["groups"]
+        if "/DATA/" in cat and "users" in cat["/DATA/"]:
+            users = cat["/DATA/"]["users"]
+            groups = cat["/DATA/"]["groups"]
         tmpCat = cat
         tmpStartCat = cat
         for f in filter(bool, startAt.split('/')):
@@ -2392,6 +2405,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 tmpStartCat[f] = {}
             tmpStartCat = tmpStartCat[f]
         f_f_fresh = False
+        cdStats = None
         for line in lsData.split("\n"):
             line = line.strip()
             # If a folder is specified (ends in a colon)
@@ -2432,6 +2446,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     del tmpCat["/NO_INDEX/"]
                 except:
                     pass
+                if cdStats:
+                    tmpCat["/"] = cdStats
+                cdStats = None
             elif self.lsParams in line:
                 # Skip our command
                 continue
@@ -2450,6 +2467,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 # fairly robust
                 if not charsIn1 and name == "." and len(options) is 0:
                     charsIn1 = line.find("./")
+                    cName = "/CURRENT/"
                 # Verify that with the ".." up a dir
                 elif not charsIn2 and name == ".." and len(options) is 0:
                     charsIn2 = line.find("../")
@@ -2572,14 +2590,19 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     if not sftpMode and t is self.FILE_TYPE_SYMLINK:
                         stats.append(symlinkDest)
                     # self.debug("%s: %s" % (cName, str(stats))
-                    options[cName] = {}
-                    options[cName]["/"] = stats
-                    if t is self.FILE_TYPE_FOLDER:
-                        # We use this to indicate that the contents of this
-                        # folder have not yet been indexed (otherwise we wouldn't
-                        # be able to differentiate between this and an empty
-                        # folder).
-                        options[cName]["/NO_INDEX/"] = True
+                    if cName == "/CURRENT":
+                        # We have current folder, stats can go straight on the dict
+                        cdStats = stats
+                        cName = None
+                    else:
+                        options[cName] = {}
+                        options[cName]["/"] = stats
+                        if t is self.FILE_TYPE_FOLDER:
+                            # We use this to indicate that the contents of this
+                            # folder have not yet been indexed (otherwise we wouldn't
+                            # be able to differentiate between this and an empty
+                            # folder).
+                            options[cName]["/NO_INDEX/"] = True
         # Put our final dict of folder contents onto the main dict
         tmpCat = tmpStartCat
         for f in filter(bool, key.split('/')):
@@ -2603,14 +2626,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         except:
             pass
         # add user and group shizzle
-        if "/" not in cat:
-            cat["/"] = {}
-        cat["/"]["server"] = self.serverName
-        if "created" not in cat["/"]:
-            cat["/"]["created"] = int(time.time())
-        cat["/"]["updated"] = int(time.time())
-        cat["/"]["users"] = users
-        cat["/"]["groups"] = groups
+        if "/DATA/" not in cat:
+            cat["/DATA/"] = {}
+        cat["/DATA/"]["server"] = self.serverName
+        if "created" not in cat["/DATA/"]:
+            cat["/DATA/"]["created"] = int(time.time())
+        cat["/DATA/"]["updated"] = int(time.time())
+        cat["/DATA/"]["users"] = users
+        cat["/DATA/"]["groups"] = groups
         return cat
 
     def up_dir_to_path(self, symlinkDest, prepend):
@@ -2636,6 +2659,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         value = self.SORT_BY_NAME
         if setting == "name":
             value = self.SORT_BY_NAME
+        if setting == "extension":
+            value = self.SORT_BY_EXT
         elif setting == "type":
             value = self.SORT_BY_TYPE
         elif setting == "size":
@@ -2648,6 +2673,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         value = ""
         if self.orderBy == self.SORT_BY_NAME:
             value = "name"
+        elif self.orderBy == self.SORT_BY_EXT:
+            value = "extension"
         elif self.orderBy == self.SORT_BY_SIZE:
             value = "size"
         elif self.orderBy == self.SORT_BY_MODIFIED:
