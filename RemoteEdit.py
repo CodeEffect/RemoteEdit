@@ -44,12 +44,14 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     bgCatStep = 0
     permsLookup = None
     lsParams = "-lap --time-style=long-iso --color=never"
+    unixLsParams = "-lapD\"%Y-%m-%d %H:%M\""
     orderBy = "name"
     orderReverse = False
     plinkPromptComtains = "$"
     psftpPromptContains = "psftp>"
     tempPath = "/tmp"
     timeout = 60
+    hostUnknown = True
     FILE_TYPE_FILE = 0
     FILE_TYPE_FOLDER = 1
     FILE_TYPE_SYMLINK = 2
@@ -82,7 +84,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     # status bar busy
     # Server health (disks, htop etc) Status bar?
     # keepalives
-    # server feature detection?
     # host key not cached
     # SVN switch etc etc for configured dir's
 
@@ -189,6 +190,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # If only 1 server found then it ca be our default fuzzy find server
         if len(self.servers) == 1:
             self.fuzzyServer = serverName
+
+    def get_ls_params(self):
+        if self.get_settings().get("%s:ls_version" % self.serverName) == "UNIX":
+            return self.unixLsParams
+        else:
+            return self.lsParams
 
     def create_queues(self):
         # Set up our queues
@@ -405,7 +412,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def start_server(self, serverName, quickConnect=False):
         try:
-            # self.debug("%s, %s, %s" % (serverName, self.serverName, self.lastDir))
             if self.serverName != serverName:
                 self.bgCat = 0
                 self.serverName = serverName
@@ -478,8 +484,58 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "remote_path",
                 "/home/%s" % self.get_server_setting("user")
             )
-        self.check_cat()
-        self.show_current_path_panel(doCat=False)
+        # If we're not sftp only then see if we've gathered any info on this server
+        if not self.get_server_setting("sftp_only") and not self.get_settings().get("%s:ls_version" % self.serverName):
+            cmd = "echo $SHELL; grep --version; ls --version"
+            self.run_ssh_command(cmd, callback=self.handle_server_info)
+        else:
+            self.check_cat()
+            self.show_current_path_panel(doCat=False)
+
+    def handle_server_info(self, results):
+        if "host_unknown" in results:
+            if sublime.ok_cancel_dialog(
+                "IMPORTANT! This host has not been seen before, would you like to PERMANENTLY record its fingerprint for later connections?",
+                "Yes, store the server fingerprint"
+            ):
+                cmd = "echo $SHELL; grep --version; ls --version"
+                self.run_ssh_command(cmd, callback=self.handle_server_info, acceptNew=True)
+        else:
+            # Firstly, which ls do I have?
+            if "ls: illegal option" in results["out"]:
+                lsVersion = "UNIX"
+            else:
+                lsReg = re.compile("^ls\s.*\s([0-9]+\.[0-9]+)\s*$", re.MULTILINE)
+                lsRes = re.search(lsReg, results["out"])
+                if not lsRes:
+                    # This will have to do for now, await more info
+                    lsVersion = "UNIX"
+                else:
+                    lsVersion = lsRes.group(1)
+            # Next, which grep
+            grepReg = re.compile("^.*\sgrep\s([0-9]+\.[0-9]+\.[0-9]+)\s*$", re.MULTILINE)
+            grepRes = re.search(grepReg, results["out"])
+            if not grepRes:
+                grepVersion = "UNKNOWN"
+            else:
+                grepVersion = grepRes.group(1)
+            # Lastly, which shell am I in?
+            shellVersion = results["out"].split("\n")[1].strip().split("/")[-1]
+            # Now save the settings back
+            settings = {}
+            settings["ls_version"] = lsVersion
+            settings["grep_version"] = grepVersion
+            settings["shell"] = shellVersion
+            self.save_server_settings(self.serverName, settings)
+            self.check_cat()
+            self.show_current_path_panel()
+
+    def save_server_settings(self, server, settings):
+        # Apologies, this is horrible
+        sSettings = self.get_settings()
+        for settingKey in settings:
+            sSettings.set(self.serverName + ":" + settingKey, settings[settingKey])
+        sublime.save_settings(self.settingFile)
 
     def handle_quick_host(self, cs):
         self.server = {}
@@ -538,14 +594,24 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             for f in self.catExcludeFolders:
                 exclude += "--exclude-dir=\"%s\" " % f
         # Direct the grep output to a file and download it to parse
-        cmd = "cd %s && grep -i %s-nR -A2 -B2 \"%s\" . > %s 2>/dev/null; echo %s;" % (
-            self.escape_remote_path(self.lastDir),
-            exclude,
-            self.escape_remote_path(search),
-            self.escape_remote_path(remotePath),
-            "$(((66666 + 44445) * 1000000 + (333333 * 3)))"
-        )
-        checkReturn = "111111999999"
+        (q, a) = self.get_arithmetic()
+        if "csh" in self.get_settings().get("%s:shell" % self.serverName):
+            cmd = "cd %s && ( grep -i %s-nR -A2 -B2 \"%s\" . > %s ) >&/dev/null; echo %s;" % (
+                self.escape_remote_path(self.lastDir),
+                exclude,
+                self.escape_remote_path(search),
+                self.escape_remote_path(remotePath),
+                q
+            )
+        else:
+            cmd = "cd %s && grep -i %s-nR -A2 -B2 \"%s\" . > %s 2>/dev/null; echo %s;" % (
+                self.escape_remote_path(self.lastDir),
+                exclude,
+                self.escape_remote_path(search),
+                self.escape_remote_path(remotePath),
+                q
+            )
+        checkReturn = a
         self.run_ssh_command(
             cmd,
             checkReturn=checkReturn,
@@ -678,7 +744,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             )
         else:
             cmd = "ls %s %s" % (
-                self.lsParams,
+                self.get_ls_params(),
                 self.escape_remote_path(path)
             )
             self.run_ssh_command(
@@ -692,7 +758,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.lastDir = callbackPassthrough["prevDir"]
             self.show_current_path_panel()
             self.error_message("Error navigating to %s" % callbackPassthrough["path"])
-        elif "no such file or directory" in results["out"]:
+        elif "o such file or directory" in results["out"]:
             # sftp, either a file or doesn't exist. Do the same but go up a folder...
             # ls parent, check for file then prevDir or open file
             if self.get_server_setting("sftp_only", False):
@@ -706,9 +772,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     callbackPassthrough=callbackPassthrough
                 )
             else:
-                # Pretty sure we should never get here as that error message is
-                # from SFTP but if we do then display an error msg and go prevDir
-                self.error_message("Unable to open %s" % callbackPassthrough["path"])
+                (head, tail) = self.split_path(callbackPassthrough["path"])
+                cmd = "ls %s %s" % (
+                    self.get_ls_params(),
+                    self.escape_remote_path(head)
+                )
+                self.run_ssh_command(
+                    cmd,
+                    callback=self.unknown_callback_2,
+                    callbackPassthrough=callbackPassthrough
+                )
         elif "Not a directory" in results["out"]:
             # It's a file.. open it
             self.maintain_or_download(callbackPassthrough["path"])
@@ -723,7 +796,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.show_current_path_panel()
 
     def unknown_callback_2(self, results, callbackPassthrough):
-        if not results["success"] or "no such file or directory" in results["out"]:
+        if not results["success"] or "o such file or directory" in results["out"]:
             self.lastDir = callbackPassthrough["prevDir"]
             self.show_current_path_panel()
             return self.error_message("Error navigating to %s" % callbackPassthrough["path"])
@@ -1006,13 +1079,15 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.tempPath,
             fileName
         )
-        cmd = "cd %s && %s %s %s && echo $((66666 + 44445));" % (
+        (q, a) = self.get_arithmetic()
+        cmd = "cd %s && %s %s %s && %s;" % (
             self.escape_remote_path(self.lastDir),
             cmd,
             self.escape_remote_path(compressTo),
-            self.selected
+            self.selected,
+            q
         )
-        checkReturn = "111111"
+        checkReturn = a
         callbackPassthrough = {}
         callbackPassthrough["ext"] = ext
         callbackPassthrough["folder"] = self.lastDir
@@ -2030,7 +2105,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 if not self.run_sftp_command(cmd, callback=callback, callbackPassthrough=callbackPassthrough):
                     return False
             else:
-                cmd = "ls %s %s" % (self.lsParams, self.escape_remote_path(d))
+                cmd = "ls %s %s" % (
+                    self.get_ls_params(),
+                    self.escape_remote_path(d)
+                )
                 if not self.run_ssh_command(cmd, callback=callback, callbackPassthrough=callbackPassthrough):
                     return False
             results = {}
@@ -2063,8 +2141,23 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def list_directory_callback(self, results, callbackPassthrough=None, calledBack=True):
         if not results["success"]:
-            return self.error_message("Error listing folder %s" % callbackPassthrough["folder"])
-        if "Not a directory" in results["out"]:
+            return self.error_message(
+                "Error listing folder %s" % callbackPassthrough["folder"]
+            )
+        elif "No such file or directory" in results["out"]:
+            # Dir not found, up one and try again
+            (self.lastDir, tail) = self.split_path(self.lastDir)
+            self.error_message("Directory %s not found, trying %s" % (
+                callbackPassthrough["folder"],
+                self.lastDir
+            ))
+            return self.list_directory(
+                self.lastDir,
+                forceReload=callbackPassthrough["forceReload"],
+                callback=self.list_directory_callback,
+                doCat=callbackPassthrough["doCat"]
+            )
+        elif "Not a directory" in results["out"]:
             # Make sure we have details of the file
             (head, tail) = self.split_path(callbackPassthrough["folder"])
             self.list_directory(
@@ -2075,8 +2168,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 skipOptions=callbackPassthrough["skipOptions"]
             )
             return False
-        if "Permission denied" in results["out"]:
-            self.error_message("Permission denied when trying to access %s" % callbackPassthrough["folder"])
+        elif "Permission denied" in results["out"]:
+            self.error_message(
+                "Permission denied when trying to access %s" % callbackPassthrough["folder"]
+            )
             (self.lastDir, tail) = self.split_path(callbackPassthrough["folder"])
             return self.show_current_path_panel()
         # Parse the ls and add to the catalogue (but don't save the file)
@@ -2217,29 +2312,37 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.debug("Exception when making local folder: %s" % e)
                 return False
 
-            # Dont blindly connect here even though we send 1
-            # TODO: If this is found we should just inform the user that they
-            # need to connect manually (or set a config flag to add it???)
-            # if "host key is not cached in the registry" in self.lastErr:
-            #     send = "n\n"
-            #     plink["process"].stdin.write(bytes(send, "utf-8"))
-            #     self.await_response(plink)
-
             # We should be at a prompt
-            cmd = "cd %s && ls %s -R > %s/%sSub.cat 2>/dev/null; cd %s && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat && echo $((666 + 445));\n" % (
-                self.escape_remote_path(self.get_server_setting("cat_path")),
-                self.lsParams,
-                self.escape_remote_path(self.tempPath),
-                self.serverName,
-                self.escape_remote_path(self.tempPath),
-                self.serverName,
-                self.serverName,
-                self.serverName,
-                self.serverName
-            )
+            (q, a) = self.get_arithmetic()
+            if "csh" in self.get_settings().get("%s:shell" % self.serverName):
+                cmd = "cd %s && ( ls %s -R > %s/%sSub.cat ) >&/dev/null; cd %s && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat && %s;\n" % (
+                    self.escape_remote_path(self.get_server_setting("cat_path")),
+                    self.get_ls_params(),
+                    self.escape_remote_path(self.tempPath),
+                    self.serverName,
+                    self.escape_remote_path(self.tempPath),
+                    self.serverName,
+                    self.serverName,
+                    self.serverName,
+                    self.serverName,
+                    q
+                )
+            else:
+                cmd = "cd %s && ls %s -R > %s/%sSub.cat 2>/dev/null; cd %s && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat && %s;\n" % (
+                    self.escape_remote_path(self.get_server_setting("cat_path")),
+                    self.get_ls_params(),
+                    self.escape_remote_path(self.tempPath),
+                    self.serverName,
+                    self.escape_remote_path(self.tempPath),
+                    self.serverName,
+                    self.serverName,
+                    self.serverName,
+                    self.serverName,
+                    q
+                )
             self.run_ssh_command(
                 cmd,
-                checkReturn="1111",
+                checkReturn=a,
                 listenAttempts=10,
                 callback=self.cat_server,
                 callbackPassthrough=cp
@@ -2401,6 +2504,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if "/CAT_DATA/" in cat and "users" in cat["/CAT_DATA/"]:
             users = cat["/CAT_DATA/"]["users"]
             groups = cat["/CAT_DATA/"]["groups"]
+        if len(cat) == 0:
+            cat["/NO_INDEX/"] = True
         tmpCat = cat
         tmpStartCat = cat
         for f in filter(bool, startAt.split('/')):
@@ -2409,6 +2514,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             tmpStartCat = tmpStartCat[f]
         f_f_fresh = False
         cdStats = None
+        key = "/"
+        options = {}
+        charsIn1 = 0
+        charsIn2 = 0
         for line in lsData.split("\n"):
             line = line.strip()
             # If a folder is specified (ends in a colon)
@@ -2452,7 +2561,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 if cdStats:
                     tmpCat["/"] = cdStats
                 cdStats = None
-            elif self.lsParams in line:
+            elif self.get_ls_params() in line:
                 # Skip our command
                 continue
             else:
@@ -2799,7 +2908,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         timeout=None,
         callback=None,
         callbackPassthrough=None,
-        dropResults=False
+        dropResults=False,
+        acceptNew=False
     ):
         if self.get_server_setting("sftp_only", False):
             return self.error_message("This method is not supported under sftp_only mode. You may enable /disable this setting in your per server settings file.")
@@ -2811,7 +2921,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             timeout,
             callback,
             callbackPassthrough,
-            dropResults
+            dropResults,
+            acceptNew
         )
 
     def run_sftp_command(
@@ -2822,7 +2933,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         timeout=None,
         callback=None,
         callbackPassthrough=None,
-        dropResults=False
+        dropResults=False,
+        acceptNew=False
     ):
         return self.run_remote_command(
             "sftp",
@@ -2832,7 +2944,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             timeout,
             callback,
             callbackPassthrough,
-            dropResults
+            dropResults,
+            acceptNew
         )
 
     def escape_remote_path(self, path):
@@ -2866,9 +2979,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         timeout=None,
         callback=None,
         callbackPassthrough=None,
-        dropResults=False
+        dropResults=False,
+        acceptNew=False
     ):
-        self.debug("run_remote_command called for %s and cmd: \"%s\"" % (
+        self.debug("run %s command called with cmd: \"%s\"" % (
             appType,
             cmd
         ))
@@ -2881,6 +2995,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         work["prompt_contains"] = checkReturn
         work["listen_attempts"] = listenAttempts
         work["drop_results"] = dropResults
+        work["accept_new_host"] = acceptNew
         # Generate a unique key to listen for results on
         m = hashlib.md5()
         m.update(("%s%s" % (cmd, str(time.time()))).encode('utf-8'))
@@ -2893,7 +3008,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.debug("....now on the queue.....")
         startTime = time.time()
         if callback:
-            self.debug("Using set_timeout to call the callback handler to check for results")
+            self.debug("Calling set_timeout to check for results")
             # TODO: This should be totally events driven, have a thread block
             # on a queue and on return of data call a callback. Once we've
             # moved at least a bit towards that from where we are now it should
@@ -2949,10 +3064,15 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 callback(results, callbackPassthrough)
         elif time.time() > expireTime:
             self.window.active_view().set_status("RE", "")
-            callback(
-                {"success": False, "out": "", "err": ""},
-                callbackPassthrough
-            )
+            if callbackPassthrough is None:
+                callback(
+                    {"success": False, "out": "", "err": ""}
+                )
+            else:
+                callback(
+                    {"success": False, "out": "", "err": ""},
+                    callbackPassthrough
+                )
         else:
             sublime.set_timeout(
                 lambda: self.handle_callbacks(
@@ -2965,6 +3085,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 ),
                 100
             )
+
+    def get_arithmetic(self):
+        if "csh" in self.get_settings().get("%s:shell" % self.serverName):
+            return ("echo \"uneeq\"`expr 66666666 + 44444445`\"uneeq\"", "uneeq111111111uneeq")
+        else:
+            return ("echo \"uneeq\"$((66666666 + 44444445))\"uneeq\"", "uneeq111111111uneeq")
 
 
 def plugin_loaded():

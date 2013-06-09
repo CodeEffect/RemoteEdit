@@ -45,7 +45,6 @@ Once saved, another tap of `F5` should allow you to select your server then brow
 ## Known Issues ##
 
  - It totally spanks your .bash_history with ls's
- - Will fail if host key of remote server is not already cached
  - As SSH is used for some functionality and app versions and command line switches differ there will be many issues with switches not being supported or being different. If you can, please take the time to report any issues that you're having. The more you are able to help out, the better the plugin will become.
 
 ## Default key bindings ##

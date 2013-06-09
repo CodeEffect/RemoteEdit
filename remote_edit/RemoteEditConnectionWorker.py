@@ -45,6 +45,7 @@ class RemoteEditConnectionWorker(threading.Thread):
     queue = None
     results = None
     work = None
+    hostUnknown = None
 
     def config(self, threadId, appType, queue, results):
         self.threadId = threadId
@@ -95,7 +96,8 @@ class RemoteEditConnectionWorker(threading.Thread):
         success = self.run_command(
             self.work["cmd"],
             self.work["prompt_contains"],
-            self.work["listen_attempts"]
+            self.work["listen_attempts"],
+            self.work["accept_new_host"]
         )
         # Put together the results object and add it to the dict shated with
         # the parent
@@ -104,6 +106,8 @@ class RemoteEditConnectionWorker(threading.Thread):
             results["success"] = success
             results["out"] = self.lastOut
             results["err"] = self.lastErr
+            if self.hostUnknown:
+                results["host_unknown"] = True
             # results["failure_reason_id"]
             self.results[self.work["key"]] = results
 
@@ -112,7 +116,8 @@ class RemoteEditConnectionWorker(threading.Thread):
         self.close_connection()
         self.debug("Thread %s has left the building." % self.threadId)
 
-    def run_command(self, cmd, checkReturn=None, listenAttempts=1):
+    def run_command(self, cmd, checkReturn=None, listenAttempts=1, acceptNew=False):
+        self.hostUnknown = False
         # Record which server we're connected to
         self.serverName = self.work["server_name"]
         # If checkReturn is overridden on a per command basis then it only
@@ -127,7 +132,7 @@ class RemoteEditConnectionWorker(threading.Thread):
             promptContains = self.promptContains
         if checkReturn is None:
             checkReturn = promptContains
-        if not self.connect(promptContains):
+        if not self.connect(promptContains, acceptNew):
             self.debug("Error connecting")
             return False
         # Write the cmd string to stdin
@@ -162,7 +167,7 @@ class RemoteEditConnectionWorker(threading.Thread):
             return False
         return True
 
-    def connect(self, promptContains):
+    def connect(self, promptContains, acceptNew):
         try:
             if self.process.poll() is None:
                 self.debug(":o) Polling ok, process alive and well")
@@ -174,6 +179,15 @@ class RemoteEditConnectionWorker(threading.Thread):
         # Need to reconnect
         self.create_process()
         self.await_response()
+        if "host key is not cached in the registry" in self.lastErr:
+            if acceptNew:
+                self.write_command("y")
+                self.await_response()
+            else:
+                self.process.terminate()
+                self.process = None
+                self.hostUnknown = True
+                return False
         if promptContains not in self.lastOut:
             self.await_response()
             if promptContains not in self.lastOut:
@@ -199,10 +213,6 @@ class RemoteEditConnectionWorker(threading.Thread):
             (outB, errB) = self.read_pipes()
             self.lastOut += str(outB)
             self.lastErr += str(errB)
-            # This code was to check to see if the process has died. Before we
-            # moved to a subprocess / thread communication model this worked
-            # fine. With the current code the process lies! After the second
-            # stdin write it now reports a returncode of 1 but keeps running.
             if self.process.poll() is not None:
                 self.debug("Process died")
                 self.lostConnection += 1
