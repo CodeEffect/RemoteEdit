@@ -8,13 +8,12 @@ import os
 
 class RemoteEditDisplaySearchCommand(sublime_plugin.TextCommand):
     def run(self, edit, search="", serverName="", filePath="", baseDir=""):
-        print("Displaying search")
         try:
             lf = open(filePath, "r", encoding="utf-8", errors="ignore")
             results = lf.read()
             lf.close()
         except:
-            sublime.error_message("Error searching remote server")
+            return sublime.error_message("Error searching remote server")
         # Parse the results
         i = 0
         matches = 0

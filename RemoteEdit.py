@@ -513,7 +513,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 else:
                     lsVersion = lsRes.group(1)
             # Next, which grep
-            grepReg = re.compile("^.*\sgrep\s([0-9]+\.[0-9]+\.[0-9]+)\s*$", re.MULTILINE)
+            grepReg = re.compile("^.*\s*grep\s*.*([0-9]+\.[0-9]+\.[0-9]+)\s*$", re.MULTILINE)
             grepRes = re.search(grepReg, results["out"])
             if not grepRes:
                 grepVersion = "UNKNOWN"
@@ -590,24 +590,31 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             tmpFileName
         )
         exclude = ""
+        postExclude = ""
         if self.catExcludeFolders:
-            for f in self.catExcludeFolders:
-                exclude += "--exclude-dir=\"%s\" " % f
+            if self.get_settings().get("%s:grep_version" % self.serverName, "1.0.0") < "2.5.2":
+                for f in self.catExcludeFolders:
+                    postExclude += "| grep -v \"%s\" " % f
+            else:
+                for f in self.catExcludeFolders:
+                    exclude += "--exclude-dir=\"%s\" " % f
         # Direct the grep output to a file and download it to parse
         (q, a) = self.get_arithmetic()
         if "csh" in self.get_settings().get("%s:shell" % self.serverName):
-            cmd = "cd %s && ( grep -i %s-nR -A2 -B2 \"%s\" . > %s ) >&/dev/null; echo %s;" % (
+            cmd = "cd %s && ( grep -i %s-nR -A2 -B2 \"%s\" . %s> %s) >&/dev/null; %s;" % (
                 self.escape_remote_path(self.lastDir),
                 exclude,
                 self.escape_remote_path(search),
+                postExclude,
                 self.escape_remote_path(remotePath),
                 q
             )
         else:
-            cmd = "cd %s && grep -i %s-nR -A2 -B2 \"%s\" . > %s 2>/dev/null; echo %s;" % (
+            cmd = "cd %s && grep -i %s-nR -A2 -B2 \"%s\" . %s> %s 2>/dev/null; %s;" % (
                 self.escape_remote_path(self.lastDir),
                 exclude,
                 self.escape_remote_path(search),
+                postExclude,
                 self.escape_remote_path(remotePath),
                 q
             )
@@ -623,6 +630,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def grep_callback_1(self, results, info):
         if not results["success"]:
             return self.error_message("Error searching remote server")
+        # Make local folder to dave into
+        try:
+            os.makedirs(self.get_local_tmp_path())
+        except FileExistsError:
+            pass
         # Download results
         cmd = "get %s %s" % (
             self.escape_remote_path(info["remote"]),
@@ -2045,7 +2057,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     raise Exception("Path not in catalogue")
                 # self.debug("D is: %s" % d)
                 # self.debug("Fldr is: %s" % fldr)
-                for f in sorted(filter(self.remove_stats, fldr), reverse=self.orderReverse, key=lambda x: fldr[x]["/"][self.orderBy] if self.orderBy != self.SORT_BY_NAME and self.orderBy != self.SORT_BY_EXT else (x.lower() if self.orderBy == self.SORT_BY_NAME else (x.split(".")[-1] if "." in x else "zzzzzz" + x))):
+                for f in sorted(filter(self.remove_stats, fldr), reverse=self.orderReverse, key=lambda x: fldr[x]["/"][self.orderBy] if self.orderBy not in [self.SORT_BY_NAME, self.SORT_BY_EXT] else (x.lower() if self.orderBy == self.SORT_BY_NAME else (x.split(".")[-1] if "." in x and fldr[x]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FILE else ("zzzzzz" + x if fldr[x]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FILE else "zzzzzzzzz" + x)))):
                     # self.debug("F is: %s" % f)
                     if self.showHidden or (not self.showHidden and f[0] != "."):
                         if fldr[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER:
@@ -3045,6 +3057,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             return result["success"]
 
     def handle_callbacks(self, key, expireTime, callback, callbackPassthrough, statusState=0, statusDir=1):
+        # TODO: If "password: " in self out then password wrong, show error message
         before = statusState % 8
         after = 7 - before
         if not after:
@@ -3052,9 +3065,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         elif not before:
             statusDir = 1
         statusState += statusDir
-        self.window.active_view().set_status("RE", "RemoteEdit [%s=%s]" % (" " * before, " " * after))
+        self.window.active_view().set_status("remoteedit", "RemoteEdit [%s=%s]" % (" " * before, " " * after))
         if key in self.appResults:
-            self.window.active_view().set_status("RE", "")
+            self.window.active_view().set_status("remoteedit", "")
             self.debug("Results found in callback handler, firing the callback")
             results = self.appResults[key]
             del self.appResults[key]
@@ -3063,7 +3076,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             else:
                 callback(results, callbackPassthrough)
         elif time.time() > expireTime:
-            self.window.active_view().set_status("RE", "")
+            self.window.active_view().set_status("remoteedit", "")
             if callbackPassthrough is None:
                 callback(
                     {"success": False, "out": "", "err": ""}
