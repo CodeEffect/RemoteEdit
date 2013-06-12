@@ -179,10 +179,12 @@ class RemoteEditConnectionWorker(threading.Thread):
         # Need to reconnect
         self.create_process()
         self.await_response()
+        # TODO: if "password:" in out then discon + flag somehow for resp handler to take care of
         if "host key is not cached in the registry" in self.lastErr:
             if acceptNew:
                 self.write_command("y")
                 self.await_response()
+                # TODO: if "password:" in out then discon + start again
             else:
                 self.process.terminate()
                 self.process = None
@@ -217,10 +219,14 @@ class RemoteEditConnectionWorker(threading.Thread):
                 self.debug("Process died")
                 self.lostConnection += 1
                 break
-            if (self.lastOut or self.lastErr) and not outB and not errB:
+            elif (self.lastOut or self.lastErr) and not outB and not errB:
                 i += 1
                 if i > 10:
+                    self.debug("Found response")
                     break
+            elif time.time() > self.work["expire_at"]:
+                self.debug("Connection timed out")
+                break
             time.sleep(0.01)
         if self.lastOut:
             self.debug(

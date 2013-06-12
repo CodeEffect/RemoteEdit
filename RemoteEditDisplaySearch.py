@@ -31,7 +31,7 @@ class RemoteEditDisplaySearchCommand(sublime_plugin.TextCommand):
             if i is 1:
                 # First line is our search command
                 continue
-            if "111111999999" in line:
+            if "uneeq111111111uneeq" in line:
                 # We're done
                 break
             if line and line[0:2] == "--":
