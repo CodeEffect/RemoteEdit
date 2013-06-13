@@ -87,18 +87,18 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # Load the connector
         if not self.connector:
             self.connector = RemoteEditConnector(self.window)
-        # If save was called from the external RE events handler class then save
-        # the file back to the server
         if action == "save" and save:
+            # If save was called from the external RE events handler class then save
+            # the file back to the server
             self.save(save)
-        # Tidy up our local temp folder. This should only contain files that are
-        # open but occasionally if a command fails halfway through it doesn't
-        # keep things tidy
         elif action == "on_app_start":
+            # Tidy up our local temp folder. This should only contain files that are
+            # open but occasionally if a command fails halfway through it doesn't
+            # keep things tidy
             self.tidy_local_tmp_path()
-        # If fuzzy was passed as a command arg then we display the fuzzy file
-        # list from the catalogue
         elif action == "fuzzy":
+            # If fuzzy was passed as a command arg then we display the fuzzy file
+            # list from the catalogue
             # Work out which server we're listing
             self.fuzzyServer = self.get_settings().get(
                 "default_fuzzy_server",
@@ -126,22 +126,20 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.show_quick_panel(self.items, self.handle_fuzzy)
             else:
                 self.error_message("No server selected. Please connect and select a default server")
-        # Else, if we have a passed filename, server and line number from the
-        # mouse click event handler then a search result has been clicked on.
-        # Download the file and open to edit.
         elif fileName and serverName and lineNumber:
+            # Else, if we have a passed filename, server and line number from the
+            # mouse click event handler then a search result has been clicked on.
+            # Download the file and open to edit.
             self.serverName = serverName
             self.server = self.servers[self.serverName]
             self.download_and_open(fileName, lineNumber=lineNumber)
-        # If we get this far then it's just a request to start normally. If
-        # serverName is set then we can go straight to browsing that server
         elif self.serverName:
-            # Fire up the self.serverName server
+            # If we get this far then it's just a request to start normally. If
+            # serverName is set then we can go straight to browsing that server
             self.start_server(self.serverName)
-        # Lastly, no serer has yet been selected, display the server list and
-        # other options
         else:
-            # List servers and startup options
+            # Lastly, no serer has yet been selected, display the server list and
+            # other options
             self.items = [name for name in sorted(self.servers)]
             items = [[
                 "  %s (%s)" % (name, self.servers[name]["settings"]["host"]),
