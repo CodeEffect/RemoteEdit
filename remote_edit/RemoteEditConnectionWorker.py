@@ -44,16 +44,21 @@ class RemoteEditConnectionWorker(threading.Thread):
     appType = None
     queue = None
     results = None
+    platform = None
     work = None
     hostUnknown = None
 
-    def config(self, threadId, appType, queue, results):
+    def config(self, threadId, appType, queue, results, platform):
         self.threadId = threadId
         self.appType = appType
         self.queue = queue
         self.results = results
+        self.platform = platform
         if self.appType == "sftp":
-            self.promptContains = "psftp>"
+            if self.platform == "windows":
+                self.promptContains = "psftp>"
+            else:
+                self.promptContains = "sftp>"
         else:
             self.promptContains = "$"
 
@@ -70,6 +75,8 @@ class RemoteEditConnectionWorker(threading.Thread):
             if self.queue:
                 self.debug("Start work loop")
                 self.work = self.queue.get()
+                if "timeout" in self.work:
+                    self.work["expire_at"] = self.work["timeout"] + time.time()
                 self.process_work_and_respond()
                 self.queue.task_done()
                 self.debug("End work loop")
@@ -106,6 +113,7 @@ class RemoteEditConnectionWorker(threading.Thread):
             results["success"] = success
             results["out"] = self.lastOut
             results["err"] = self.lastErr
+            results["prompt_contains"] = self.work["prompt_contains"]
             if self.hostUnknown:
                 results["host_unknown"] = True
             # results["failure_reason_id"]
@@ -116,7 +124,7 @@ class RemoteEditConnectionWorker(threading.Thread):
         self.close_connection()
         self.debug("Thread %s has left the building." % self.threadId)
 
-    def run_command(self, cmd, checkReturn=None, listenAttempts=1, acceptNew=False):
+    def run_command(self, cmd, checkReturn=None, listenAttempts=5, acceptNew=False):
         self.hostUnknown = False
         # Record which server we're connected to
         self.serverName = self.work["server_name"]
@@ -137,6 +145,8 @@ class RemoteEditConnectionWorker(threading.Thread):
             return False
         # Write the cmd string to stdin
         self.lostConnection = 0
+        # Discard any output in the buffers...
+        self.await_response(discard=True)
         if cmd and not self.write_command(cmd):
             self.debug("Error writing")
             return False
@@ -145,6 +155,9 @@ class RemoteEditConnectionWorker(threading.Thread):
         while listenAttempts > 0:
             self.debug("Now listening")
             self.await_response()
+            # Ensure we see the command prompt
+            if self.platform != "windows":
+                self.write_command(" ")
             # If we lost connection after writing then try again
             # We check for 1 to ensure that we only do this once
             if self.lostConnection == 1:
@@ -156,6 +169,9 @@ class RemoteEditConnectionWorker(threading.Thread):
                         self.await_response()
                 else:
                     self.lastOut = ""
+            # With sftp on nix the prompt isn't shown until you send a command, strip it so it isn't picked up as the checkReturn and we possibly stop collecting too soon
+            if self.appType == "sftp" and self.platform != "windows" and len(self.lastOut) > 10 and self.lastOut[0:len(checkReturn)] == checkReturn:
+                self.lastOut = self.lastOut[len(checkReturn):]
             buf += self.lastOut
             if checkReturn in self.lastOut:
                 self.debug("Found checkReturn")
@@ -178,19 +194,26 @@ class RemoteEditConnectionWorker(threading.Thread):
             self.debug("Process not running: %s" % e)
         # Need to reconnect
         self.create_process()
+        # Nix only, we need this as otherwise lastOut is empty
+        if self.appType == "ssh" and self.platform != "windows":
+            self.write_command("echo '%s'" % promptContains)
         self.await_response()
-        # TODO: if "password:" in out then discon + flag somehow for resp handler to take care of
+        if "Password:" in self.lastOut and self.get_server_setting("password", None):
+            self.write_command(self.get_server_setting("password"), mask=True)
+            self.await_response()
         if "host key is not cached in the registry" in self.lastErr:
             if acceptNew:
-                self.write_command("y")
+                self.write_command("yes")
                 self.await_response()
-                # TODO: if "password:" in out then discon + start again
+                if "Password:" in self.lastOut and self.get_server_setting("password", None):
+                    self.write_command(self.get_server_setting("password"), mask=True)
+                    self.await_response()
             else:
                 self.process.terminate()
                 self.process = None
                 self.hostUnknown = True
                 return False
-        if promptContains not in self.lastOut:
+        if promptContains not in self.lastOut and "Connected to" not in self.lastErr:
             self.await_response()
             if promptContains not in self.lastOut:
                 self.debug("Connect failed: %s" % self.lastOut)
@@ -198,17 +221,20 @@ class RemoteEditConnectionWorker(threading.Thread):
         self.debug("Connection OK")
         return True
 
-    def write_command(self, cmd):
+    def write_command(self, cmd, mask=False):
         try:
-            self.debug("Sending command: %s" % cmd)
-            self.process.stdin.write(bytes("%s\n" % cmd, "utf-8"))
+            self.debug("Sending command: %s" % ("*" * len(cmd) if mask else cmd))
+            self.process.stdin.write(bytes("%s\n" % (cmd), "utf-8"))
             return True
         except Exception as e:
             self.debug("Command failed: %s" % e)
             return False
 
-    def await_response(self):
-        self.debug("Waiting for output...")
+    def await_response(self, discard=False):
+        if discard:
+            self.debug("Discarding output...")
+        else:
+            self.debug("Waiting for output...")
         self.lastOut = self.lastErr = ""
         i = 0
         while True:
@@ -227,6 +253,8 @@ class RemoteEditConnectionWorker(threading.Thread):
             elif time.time() > self.work["expire_at"]:
                 self.debug("Connection timed out")
                 break
+            elif discard:
+                return
             time.sleep(0.01)
         if self.lastOut:
             self.debug(
@@ -268,34 +296,64 @@ class RemoteEditConnectionWorker(threading.Thread):
             pass
 
     def get_local_command(self):
-        cmd = [
-            self.get_app_path(),
-            "-agent",
-            self.get_server_setting("host"),
-            "-l",
-            self.get_server_setting("user")
-        ]
-        if self.appType == "ssh":
-            cmd.append("-ssh")
-        if self.get_server_setting("port", None):
-            cmd.append("-P")
-            cmd.append(self.get_server_setting("port"))
-        if self.get_server_setting("password", None):
-            cmd.append("-pw")
-            cmd.append(self.get_server_setting("password"))
-        sshKeyFile = self.get_server_setting("ssh_key_file", None)
-        if sshKeyFile:
-            if "%" in sshKeyFile:
-                sshKeyFile = os.path.expandvars(sshKeyFile)
+        if self.platform == "windows":
+            cmd = [
+                self.get_app_path(),
+                "-agent",
+                self.get_server_setting("host"),
+                "-l",
+                self.get_server_setting("user")
+            ]
+            if self.appType == "ssh":
+                cmd.append("-ssh")
+            if self.get_server_setting("port", None):
+                cmd.append("-P")
+                cmd.append(self.get_server_setting("port"))
+            if self.get_server_setting("password", None):
+                cmd.append("-pw")
+                cmd.append(self.get_server_setting("password"))
+            sshKeyFile = self.get_server_setting("ssh_key_file", None)
+            if sshKeyFile:
+                if "%" in sshKeyFile:
+                    sshKeyFile = os.path.expandvars(sshKeyFile)
                 cmd.append("-i")
                 cmd.append(sshKeyFile)
+        else:
+            # Ensure that SSH Askpass doesn't popup when we connect
+            os.unsetenv("SSH_ASKPASS")
+            cmd = [
+                self.get_app_path()
+            ]
+            if self.appType == "ssh":
+                cmd.append("-q")
+            if self.get_server_setting("port", None):
+                cmd.append("-P")
+                cmd.append(self.get_server_setting("port"))
+            sshKeyFile = self.get_server_setting("ssh_key_file", None)
+            if sshKeyFile:
+                if "~" in sshKeyFile:
+                    sshKeyFile = os.path.expanduser(sshKeyFile)
+                cmd.append("-i")
+                cmd.append(sshKeyFile)
+            cmd.append(
+                "%s@%s" % (
+                    self.get_server_setting("user"),
+                    self.get_server_setting("host")
+                )
+            )
         return cmd
 
     def get_app_path(self):
         if self.appType == "sftp":
-            app = "psftp.exe"
+            if self.platform == "windows":
+                app = "psftp.exe"
+            else:
+                app = "sftp"
         elif self.appType == "ssh":
-            app = "plink.exe"
+            if self.platform == "windows":
+                app = "plink.exe"
+            else:
+                app = "ssh"
         else:
             raise Exception("Unknown app type")
         return os.path.join(
@@ -344,10 +402,13 @@ class RemoteEditConnectionWorker(threading.Thread):
 
     def get_bin_path(self):
         if not self.binPath:
-            self.binPath = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "bin"
-            )
+            if self.platform == "windows":
+                self.binPath = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "bin"
+                )
+            else:
+                self.binPath = "/usr/bin"
         return self.binPath
 
     def debug(self, data):

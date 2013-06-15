@@ -1,6 +1,6 @@
 # Remote Edit #
 
-A plugin for Sublime Text 3 for editing files over SFTP. Currently windows only.
+A plugin for Sublime Text 3 for editing files over SFTP.
 
 ## Details ##
 

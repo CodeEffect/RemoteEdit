@@ -17,7 +17,7 @@
 
     // If your key has a passphrase (it really should) you MUST use pageant.
     // If you use pageant you may leave this unset.
-    ${8://}"ssh_key_file": "${9:%UserProfile%\\Documents\\putty.ppk}",
+    ${8://}"ssh_key_file": "%%KEY_LOCATION%%",
 
     // IMPORTANT! Setting this to true will download a recursive "ls" of the
     // entire filesystem from "remote_path" specified above. This makes browsing

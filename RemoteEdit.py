@@ -46,6 +46,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     tempPath = "/tmp"
     timeout = 60
     connector = None
+    platform = sublime.platform()
     FILE_TYPE_FILE = 0
     FILE_TYPE_FOLDER = 1
     FILE_TYPE_SYMLINK = 2
@@ -80,6 +81,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     # keepalives
     # host key not cached
     # SVN switch etc etc for configured dir's
+
+    #  No fucking interactive shit ubuntu!!!!!
+    #  no access to tty bad file description (shut the fuck up again!!!!)
+    #  Tail a log file, awesome!!!!!
 
     def run(self, fileName=None, serverName=None, lineNumber=None, action=None, save=None):
         # Ensure that the self.servers dict is populated
@@ -300,6 +305,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             snippet = sublime.load_resource(
                 "Packages/RemoteEdit/NewServer.default-config"
             )
+            if self.platform == "windows":
+                keyLocation = "${9:%UserProfile%\\Documents\\putty.ppk}"
+            else:
+                keyLocation = "~/.ssh/id_rsa"
+            snippet = snippet.replace("%%KEY_LOCATION%%", keyLocation)
             newSrv = self.window.new_file()
             newSrv.set_name("NewServer.sublime-settings")
             newSrv.set_syntax_file("Packages/JavaScript/JSON.tmLanguage")
@@ -417,8 +427,19 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 cmd = "echo $SHELL; grep --version; ls --version"
                 self.run_ssh_command(cmd, callback=self.handle_server_info, acceptNew=True)
         else:
+            # Check we succeeded:
+            if not results["success"] or not results["out"]:
+                # Check we haven't done this before
+                try:
+                    if self.triedAgain:
+                        return self.error_message("Error connecting to %s to collect basic information. Please check your settings (especially the hostname), restart sublime and try again. If this fails, please report the error." % self.serverName)
+                except:
+                    # try once more...
+                    self.triedAgain = True
+                    cmd = "echo $SHELL; grep --version; ls --version"
+                    return self.run_ssh_command(cmd, callback=self.handle_server_info)
             # Firstly, which ls do I have?
-            if "ls: illegal option" in results["out"]:
+            if "ls: illegal option" in results["out"] or "ls: illegal option" in results["err"]:
                 lsVersion = "UNIX"
             else:
                 lsReg = re.compile("^ls\s.*\s([0-9]+\.[0-9]+)\s*$", re.MULTILINE)
@@ -429,14 +450,17 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 else:
                     lsVersion = lsRes.group(1)
             # Next, which grep
-            grepReg = re.compile("^.*\s*grep\s*.*([0-9]+\.[0-9]+\.[0-9]+)\s*$", re.MULTILINE)
+            grepReg = re.compile("^.*\s*grep\s*.*([0-9]+\.[0-9]+\.[0-9]+)\s*.*$", re.MULTILINE)
             grepRes = re.search(grepReg, results["out"])
             if not grepRes:
                 grepVersion = "UNKNOWN"
             else:
                 grepVersion = grepRes.group(1)
             # Lastly, which shell am I in?
-            shellVersion = results["out"].split("\n")[1].strip().split("/")[-1]
+            line = 1
+            if results["out"].split("\n")[0][0] == "/":
+                line = 0
+            shellVersion = results["out"].split("\n")[line].strip().split("/")[-1]
             # Now save the settings back
             settings = {}
             settings["ls_version"] = lsVersion
@@ -514,29 +538,24 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 for f in self.catExcludeFolders:
                     exclude += "--exclude-dir=\"%s\" " % f
         # Direct the grep output to a file and download it to parse
-        (q, a) = self.get_arithmetic()
         if "csh" in self.get_settings().get("%s:shell" % self.serverName):
-            cmd = "cd %s && ( grep -i %s-nR -A2 -B2 \"%s\" . %s> %s) >&/dev/null; %s;" % (
+            cmd = "cd %s && ( grep -i %s-nR -A2 -B2 \"%s\" . %s> %s) >&/dev/null;" % (
                 self.escape_remote_path(self.lastDir),
                 exclude,
                 self.escape_remote_path(search),
                 postExclude,
-                self.escape_remote_path(remotePath),
-                q
+                self.escape_remote_path(remotePath)
             )
         else:
-            cmd = "cd %s && grep -i %s-nR -A2 -B2 \"%s\" . %s> %s 2>/dev/null; %s;" % (
+            cmd = "cd %s && grep -i %s-nR -A2 -B2 \"%s\" . %s> %s 2>/dev/null;" % (
                 self.escape_remote_path(self.lastDir),
                 exclude,
                 self.escape_remote_path(search),
                 postExclude,
-                self.escape_remote_path(remotePath),
-                q
+                self.escape_remote_path(remotePath)
             )
-        checkReturn = a
         self.run_ssh_command(
             cmd,
-            checkReturn=checkReturn,
             listenAttempts=2,
             callback=self.grep_callback_1,
             cP={"local": localPath, "remote": remotePath, "search": search}
@@ -565,7 +584,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if not results["success"]:
             return self.error_message("Error downloading remote server search")
         # Now delete remote file
-        cmd = "del %s" % (
+        cmd = "rm %s" % (
             self.escape_remote_path(info["remote"])
         )
         self.run_sftp_command(cmd, dropResults=True)
@@ -665,7 +684,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def do_ls(self, path, callback, cP):
         if self.get_server_setting("sftp_only", False):
-            cmd = "ls %s" % (
+            params = ""
+            if self.platform != "windows":
+                params = "-la "
+            cmd = "ls %s%s" % (
+                params,
                 self.escape_remote_path(path)
             )
             return self.run_sftp_command(
@@ -747,12 +770,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         else:
             # give options
             # rename, chmod, chown, delete
-            downloadFolder = os.path.expandvars(
-                self.get_settings().get(
-                    "default_download_folder",
-                    "%UserProfile%\\Downloads"
-                )
-            )
+            downloadFolder = self.get_default_download_folder()
             items = [
                 ["» Edit '%s'" % selected],
                 ["» Rename '%s'" % selected],
@@ -768,6 +786,20 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # Show the options
             self.selected = selected
             self.show_quick_panel(items, self.handle_maintenance)
+
+    def get_default_download_folder(self):
+        ddf = self.get_settings().get("default_download_folder")
+        if self.platform == "windows":
+            return os.path.expandvars(
+                self.get_settings().get(
+                    "default_download_folder",
+                    "%UserProfile%\\Downloads"
+                )
+            )
+        else:
+            if "%UserProfile%" in ddf:
+                ddf = "~/Downloads"
+            return os.path.expanduser(ddf)
 
     def handle_maintenance(self, selection):
         if selection == -1:
@@ -794,12 +826,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.handle_copy(-2)
         elif selection == 4 or selection == 5:
             # Save file to download folder
-            downloadFolder = os.path.expandvars(
-                self.get_settings().get(
-                    "default_download_folder",
-                    "%UserProfile%\\Downloads"
-                )
-            )
+            downloadFolder = self.get_default_download_folder()
             self.download_file_to(self.selected, downloadFolder, bool(selection == 5))
         elif selection == 6:
             # Zip
@@ -856,7 +883,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 )
 
     def delete_file_callback(self, results, cP):
-        if not results["success"] or ": OK" not in results["out"]:
+        if not results["success"] or (self.platform == "windows" and ": OK" not in results["out"]):
             if "permission denied" in results["out"]:
                 return self.error_message(
                     "Permission denied error when trying to delete file %s" % cP["fileName"]
@@ -870,7 +897,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self.show_current_path_panel()
 
     def delete_folder_callback(self, results, cP):
-        if not results["success"] or ": OK" not in results["out"]:
+        if not results["success"] or (self.platform == "windows" and ": OK" not in results["out"]):
             if "permission denied" in results["out"]:
                 return self.error_message(
                     "Permission denied error when trying to delete folder %s" % cP["folderName"]
@@ -892,7 +919,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         if tail != fileName:
             oldPath = self.join_path(head, tail)
             newPath = self.join_path(head, fileName)
-            cmd = "mv %s %s" % (
+            cmd = "rename %s %s" % (
                 self.escape_remote_path(oldPath),
                 self.escape_remote_path(newPath)
             )
@@ -945,7 +972,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         fileName = "%s.%s" % (self.split_path(self.lastDir)[1], ext)
         self.items = [
             "When complete download to %s" % (
-                os.path.expandvars(self.get_settings().get("default_download_folder"))
+                self.get_default_download_folder()
             ),
             "Don't download, leave on server at %s" % self.join_path(
                 self.lastDir,
@@ -981,15 +1008,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.tempPath,
             fileName
         )
-        (q, a) = self.get_arithmetic()
-        cmd = "cd %s && %s %s %s && %s;" % (
+        cmd = "cd %s && %s %s %s" % (
             self.escape_remote_path(self.lastDir),
             cmd,
             self.escape_remote_path(compressTo),
-            self.selected,
-            q
+            self.selected
         )
-        checkReturn = a
         cP = {}
         cP["ext"] = ext
         cP["folder"] = self.lastDir
@@ -998,7 +1022,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         cP["compressTo"] = compressTo
         self.run_ssh_command(
             cmd,
-            checkReturn=checkReturn,
             listenAttempts=2,
             callback=self.compress_callback_1,
             cP=cP
@@ -1012,9 +1035,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         else:
             debug("Successfully compressed folder %s" % cP["folder"])
             if cP["download"]:
-                downloadFolder = os.path.expandvars(
-                    self.get_settings().get("default_download_folder")
-                )
+                downloadFolder = self.get_default_download_folder()
                 localPath = self.join_path(
                     downloadFolder,
                     cP["fileName"]
@@ -1025,9 +1046,9 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     self.escape_remote_path(cP["compressTo"]),
                     self.escape_remote_path(localPath)
                 )
-                self.run_sftp_command(cmd, listenAttempts=2, callback=self.compress_callback_2, cP=cP)
+                self.run_sftp_command(cmd, callback=self.compress_callback_2, cP=cP)
             else:
-                cmd = "mv %s %s" % (
+                cmd = "rename %s %s" % (
                     self.escape_remote_path(cP["compressTo"]),
                     self.escape_remote_path("%s.%s" % (
                         self.join_path(
@@ -1054,7 +1075,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 cP["fileName"]
             ))
             # Tidy up after ourselves
-            cmd = "del %s" % (
+            cmd = "rm %s" % (
                 self.escape_remote_path(cP["compressTo"])
             )
             self.run_sftp_command(cmd, dropResults=True)
@@ -1095,7 +1116,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         cP = {}
         cP["fileName"] = fileName
         cP["chmod"] = chmod
-        self.run_ssh_command(cmd, callback=self.chmod_callback, cP=cP)
+        self.run_sftp_command(cmd, callback=self.chmod_callback, cP=cP)
 
     def chmod_callback(self, results, cP):
         if not results["success"]:
@@ -1215,19 +1236,19 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def list_options(self):
         if self.fileInfo:
             self.options = [
-                ["» Back", "Return To Previous Directory"],
                 ["» Bookmarks", "Go To / Manage Bookmarks"],
+                ["» Back", "Return To Previous Directory"],
                 ["» Server / List Options", "Amend List Behaviour, Change Servers"],
                 ["» Folder Options", "Search / Maintain Folder"],
-                ["» Back to File / Folder List", "Return To Where You Were"]
+                ["» Return to File / Folder List", "Back To Where You Were"]
             ]
         else:
             self.options = [
-                "» Back",
                 "» Bookmarks",
+                "» Back",
                 "» Server / List Options",
                 "» Folder Options",
-                "» Back to File / Folder List"
+                "» Return to File / Folder List"
             ]
         self.show_quick_panel(self.options, self.handle_options)
 
@@ -1236,15 +1257,15 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # Back to prev list
             self.show_current_path_panel()
         elif selection == 0:
+            # Bookmarks
+            self.list_bookmarks()
+        elif selection == 1:
             # Back
             if self.prevDir is None:
                 self.serverName = None
                 return self.run()
             self.lastDir = self.prevDir
             self.show_current_path_panel()
-        elif selection == 1:
-            # Bookmarks
-            self.list_bookmarks()
         elif selection == 2:
             # Server / List options
             self.list_server_options()
@@ -1268,7 +1289,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             "» Sort by size %s" % ("ascending" if self.orderBy == self.SORT_BY_SIZE and self.orderReverse else "descending"),
             "» Sort by last modified %s" % ("descending" if self.orderBy == self.SORT_BY_MODIFIED and not self.orderReverse else "ascending"),
             "» Refresh entire catalogue",
-            "» Back to options"
+            "» Return to options"
         ]
         self.show_quick_panel(self.serverOptions, self.handle_server_options)
 
@@ -1356,7 +1377,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             "» Chown '%s'" % tail,
             "» Delete '%s' (must be empty)" % tail,
             "» Refresh this folder",
-            "» Back to options"
+            "» Return to options"
         ]
         self.show_quick_panel(self.folderOptions, self.handle_folder_options)
 
@@ -1517,7 +1538,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         for b in serverBookmarks:
             self.items.append("Go to: %s" % b)
             self.itemPaths.append(b)
-        self.items.append("» Back to options")
+        self.items.append("» Return to options")
         self.itemPaths.append("/BACK/")
         self.show_quick_panel(self.items, self.handle_bookmarks_list)
 
@@ -1664,12 +1685,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             if self.movingFrom == self.lastDir:
                 self.error_message("Source and destination paths are the same (%s), unable to move" % self.lastDir)
             else:
-                cmd = "mv %s %s" % (
+                cmd = "rename %s %s" % (
                     self.escape_remote_path(self.join_path(
                         self.movingFrom,
                         self.selected
                     )),
-                    self.escape_remote_path(self.lastDir.rstrip("/") + "/")
+                    self.escape_remote_path(self.lastDir.rstrip("/") + "/" + self.selected.strip("/"))
                 )
                 cP = {}
                 cP["folder"] = self.movingFrom
@@ -1716,7 +1737,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def move_callback(self, results, cP):
         if not results["success"] or "no such file or directory" in results["out"]:
-            self.error_message("Error moving file %s" % cP["folder"])
+            self.error_message("Error moving %s" % cP["folder"])
         cP["sftpMode"] = self.get_server_setting("sftp_only", False)
         self.do_ls(cP["folder"], callback=self.parse_list_only_callback, cP=cP)
         return self.show_current_path_panel(forceReload=True)
@@ -1729,15 +1750,18 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             if self.movingFrom == self.lastDir:
                 self.error_message("Source and destination paths are the same (%s), unable to copy" % self.lastDir)
             else:
+                dest = self.lastDir.rstrip("/") + "/"
                 cmd = "cp -r %s %s" % (
                     self.escape_remote_path(self.join_path(
                         self.movingFrom,
                         self.selected
                     )),
-                    self.escape_remote_path(self.lastDir.rstrip("/") + "/")
+                    self.escape_remote_path(dest)
                 )
                 cP = {}
                 cP["folder"] = self.movingFrom
+                cP["item"] = self.selected
+                cP["dest"] = dest
                 return self.run_ssh_command(cmd, listenAttempts=2, callback=self.copy_callback, cP=cP)
         else:
             if selection == -2:
@@ -1781,7 +1805,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def copy_callback(self, results, cP):
         if not results["success"] or "no such file or directory" in results["out"]:
-            self.error_message("Error moving file %s" % cP["folder"])
+            self.error_message("Error copying %s from %s to %s" % (
+                cP["item"],
+                cP["folder"],
+                cP["dest"]
+            ))
         cP["sftpMode"] = self.get_server_setting("sftp_only", False)
         self.do_ls(cP["folder"], callback=self.parse_list_only_callback, cP=cP)
         return self.show_current_path_panel(forceReload=True)
@@ -2169,9 +2197,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 return False
 
             # We should be at a prompt
-            (q, a) = self.get_arithmetic()
             if "csh" in self.get_settings().get("%s:shell" % self.serverName):
-                cmd = "cd %s && ( ls %s -R > %s/%sSub.cat ) >&/dev/null; cd %s && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat && %s;\n" % (
+                cmd = "cd %s && ( ls %s -R > %s/%sSub.cat ) >&/dev/null; cd %s && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat" % (
                     self.escape_remote_path(self.get_server_setting("cat_path")),
                     self.get_ls_params(),
                     self.escape_remote_path(self.tempPath),
@@ -2180,11 +2207,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     self.serverName,
                     self.serverName,
                     self.serverName,
-                    self.serverName,
-                    q
+                    self.serverName
                 )
             else:
-                cmd = "cd %s && ls %s -R > %s/%sSub.cat 2>/dev/null; cd %s && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat && %s;\n" % (
+                cmd = "cd %s && ls %s -R > %s/%sSub.cat 2>/dev/null; cd %s && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat" % (
                     self.escape_remote_path(self.get_server_setting("cat_path")),
                     self.get_ls_params(),
                     self.escape_remote_path(self.tempPath),
@@ -2193,12 +2219,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     self.serverName,
                     self.serverName,
                     self.serverName,
-                    self.serverName,
-                    q
+                    self.serverName
                 )
             self.run_ssh_command(
                 cmd,
-                checkReturn=a,
                 listenAttempts=10,
                 callback=self.cat_server,
                 cP=cp
@@ -2237,7 +2261,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             cp["step"] = self.bgCatStep
 
             # delete tmp file from server
-            cmd = "del %s" % (
+            cmd = "rm %s" % (
                 self.escape_remote_path(cp["remoteCatGzPath"])
             )
             self.run_sftp_command(
@@ -2288,6 +2312,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def load_cat(self):
         if os.path.exists(self.catFile):
+            debug("Loading catalogue from %s." % self.catFile)
             self.cat = pickle.load(open(self.catFile, "rb"))
             # Flag to indicate that a full cat is loaded
             self.cat["/CAT_DATA/"]["loaded"] = time.time()
@@ -2368,6 +2393,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         options = {}
         charsIn1 = 0
         charsIn2 = 0
+        nixSftp = sftpMode and self.platform != "windows"
         for line in lsData.split("\n"):
             line = line.strip()
             # If a folder is specified (ends in a colon)
@@ -2436,10 +2462,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 elif len(sl) < 5:
                     # Skip the "Total BYTES" message
                     pass
-                elif not charsIn1 or not charsIn2 or charsIn1 != charsIn2:
+                elif (not charsIn1 or not charsIn2 or charsIn1 != charsIn2) and not nixSftp:
                     debug("Error parsing ls output at line: \"%s\"" % line)
                 else:
-                    cName = line[charsIn1:].rstrip()
+                    if nixSftp:
+                        cName = name
+                    else:
+                        cName = line[charsIn1:].rstrip()
                     if not sftpMode and sl[0][0] == "l" and "->" in cName:
                         (cName, symlinkDest) = cName.split(" -> ")
                         # If the symlink destination starts with a / then it's
@@ -2519,7 +2548,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     # will be either "Month Day Year" or "Month Day HH:MM" (the
                     # latter for the current year)
                     if sftpMode:
-                        cName = sl[-1]
+                        if cName != "/CURRENT":
+                            cName = sl[-1]
                         if ":" in sl[7]:
                             dateTime = "%s-%s-%s %s:%s" % (
                                 time.strftime("%Y"),
@@ -2769,12 +2799,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def get_local_tmp_path(self, includeServer=True):
         if includeServer:
             return os.path.join(
-                os.path.expandvars("%temp%"),
+                os.path.expandvars("%temp%") if self.platform == "windows" else "/tmp",
                 "RemoteEdit",
                 self.serverName
             )
         return os.path.join(
-            os.path.expandvars("%temp%"),
+            os.path.expandvars("%temp%") if self.platform == "windows" else "/tmp",
             "RemoteEdit"
         )
 
@@ -2791,10 +2821,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         oldIfTouchedBefore = time.time() - ignoreIfTouchedWithin
         openFiles = []
         rootPath = self.get_local_tmp_path(False)
-        if "\\Temp\\" not in rootPath:
+        if (self.platform == "windows" and "\\Temp\\" not in rootPath) or (self.platform != "windows" and rootPath[0:4] != "/tmp"):
             # Sanity check on the path as we really, really don't want this to
             # start looping through the wrong directory deleting files as it goes
-            return self.error_message("tidy_local_tmp_path() detected that \"Temp\" was not in the \"%TEMP%\" path string and exited early. Please investigate.")
+            return self.error_message("tidy_local_tmp_path() detected that \"%s\" was not in the folder path to tidy and so exited early. Please investigate." % (
+                "Temp" if self.platform == "windows" else "/tmp"
+            ))
         for v in self.window.views():
             if v.settings().get("reData", None):
                 openFiles.append(v.file_name())
@@ -2861,7 +2893,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self,
         cmd,
         checkReturn=None,
-        listenAttempts=1,
+        listenAttempts=5,
         timeout=None,
         callback=None,
         cP=None,
@@ -2870,10 +2902,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     ):
         if self.get_server_setting("sftp_only", False):
             return self.error_message("This method is not supported under sftp_only mode. You may enable /disable this setting in your per server settings file.")
+        (q, a) = self.get_arithmetic()
         return self.connector.run_remote_command(
             "ssh",
-            cmd,
-            checkReturn,
+            cmd + "; " + q,
+            a,
             listenAttempts,
             timeout,
             callback,
@@ -2888,7 +2921,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         self,
         cmd,
         checkReturn=None,
-        listenAttempts=1,
+        listenAttempts=5,
         timeout=None,
         callback=None,
         cP=None,
@@ -2911,12 +2944,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
 
 class RemoteEditConnector(object):
+    window = None
     appResults = {}
     sshQueue = None
     sshThreads = []
     sftpQueue = None
     sftpThreads = []
-    window = None
     timeout = 60
 
     def __init__(self, window):
@@ -2942,7 +2975,8 @@ class RemoteEditConnector(object):
             key,
             "sftp",
             self.sftpQueue,
-            self.appResults
+            self.appResults,
+            sublime.platform()
         )
 
     def create_ssh_thread(self):
@@ -2955,7 +2989,8 @@ class RemoteEditConnector(object):
             key,
             "ssh",
             self.sshQueue,
-            self.appResults
+            self.appResults,
+            sublime.platform()
         )
 
     def __del__(self):
@@ -2998,7 +3033,7 @@ class RemoteEditConnector(object):
         appType,
         cmd,
         checkReturn,
-        listenAttempts=1,
+        listenAttempts=5,
         timeout=None,
         callback=None,
         cP=None,
@@ -3021,7 +3056,7 @@ class RemoteEditConnector(object):
         work["prompt_contains"] = checkReturn
         work["listen_attempts"] = listenAttempts
         work["drop_results"] = dropResults
-        work["expire_at"] = expireTime
+        work["timeout"] = timeout
         work["accept_new_host"] = acceptNew
         # Generate a unique key to listen for results on
         m = hashlib.md5()
@@ -3053,7 +3088,10 @@ class RemoteEditConnector(object):
         elif dropResults:
             return
         while True:
-            if time.time() > expireTime:
+            # Give the command a little longer to timeout (15s) as the time it
+            # went on the queue wasn't necessarily the same time that it started
+            # processing
+            if time.time() > (expireTime + 15):
                 debug("Timeout")
                 return False
             if key in self.appResults:
@@ -3067,7 +3105,6 @@ class RemoteEditConnector(object):
             return results["success"]
 
     def handle_callbacks(self, key, expireTime, callback, cP, statusState=0, statusDir=1):
-        # TODO: If "password: " in self out then password wrong, show error message
         before = statusState % 8
         after = 7 - before
         if not after:
@@ -3080,12 +3117,17 @@ class RemoteEditConnector(object):
             self.window.active_view().set_status("remoteedit", "")
             debug("Results found in callback handler, firing the callback")
             results = self.appResults[key]
+            if results["prompt_contains"]:
+                results["out"] = results["out"].replace(results["prompt_contains"], "")
             del self.appResults[key]
             if cP is None:
                 callback(results)
             else:
                 callback(results, cP)
-        elif time.time() > expireTime:
+        # Give the command a little longer to timeout (15s) as the time it
+        # went on the queue wasn't necessarily the same time that it started
+        # processing
+        elif time.time() > (expireTime + 15):
             self.window.active_view().set_status("remoteedit", "")
             if cP is None:
                 callback(

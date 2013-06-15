@@ -1,0 +1,10 @@
+[
+	// Open the main panel, add server, quick connect, list servers -> browse etc
+    { "keys": ["f5"], "command": "remote_edit" },
+
+    // Open the fuzzy file search panel, the same as ctrl+p but for a remote
+    // server. Note that you must have previously selected a server or configured
+    // a default and that you must have a current valid catalogue saved for the
+    // server.
+    { "keys": ["ctrl+shift+f5"], "command": "remote_edit", "args": {"fuzzy": "last_server"} }
+]
