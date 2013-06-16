@@ -413,7 +413,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # If we're not sftp only then see if we've gathered any info on this server
         if not self.get_server_setting("sftp_only") and not self.get_settings().get("%s:ls_version" % self.serverName):
             cmd = "echo $SHELL; grep --version; ls --version"
-            self.run_ssh_command(cmd, callback=self.handle_server_info)
+            self.run_ssh_command(cmd, callback=self.handle_server_info, skipArithmetic=True)
         else:
             self.check_cat()
             self.show_current_path_panel(doCat=False)
@@ -425,7 +425,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "Yes, store the server fingerprint"
             ):
                 cmd = "echo $SHELL; grep --version; ls --version"
-                self.run_ssh_command(cmd, callback=self.handle_server_info, acceptNew=True)
+                self.run_ssh_command(cmd, callback=self.handle_server_info, acceptNew=True, skipArithmetic=True)
         else:
             # Check we succeeded:
             if not results["success"] or not results["out"]:
@@ -2917,11 +2917,15 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         callback=None,
         cP=None,
         dropResults=False,
-        acceptNew=False
+        acceptNew=False,
+        skipArithmetic=False
     ):
         if self.get_server_setting("sftp_only", False):
             return self.error_message("This method is not supported under sftp_only mode. You may enable /disable this setting in your per server settings file.")
-        (q, a) = self.get_arithmetic()
+        q = ""
+        a = None
+        if not skipArithmetic:
+            (q, a) = self.get_arithmetic()
         return self.connector.run_remote_command(
             "ssh",
             cmd + "; " + q,
