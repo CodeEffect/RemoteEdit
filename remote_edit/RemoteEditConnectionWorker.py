@@ -219,6 +219,8 @@ class RemoteEditConnectionWorker(threading.Thread):
                 self.hostUnknown = True
                 return False
         if promptContains not in self.lastOut and "Connected to" not in self.lastErr:
+            if self.appType == "ssh" and self.platform != "windows":
+                self.write_command("echo '%s'" % promptContains)
             self.await_response()
             if promptContains not in self.lastOut:
                 self.debug("Connect failed: %s" % self.lastOut)
