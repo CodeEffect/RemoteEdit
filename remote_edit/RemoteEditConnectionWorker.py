@@ -15,6 +15,8 @@ import time
 #   work["listen_attempts"] = how many times to listen for data until we get back
 #       our specified promptContains
 #   work["key"] = uniquely identifying key used to return the result data
+#   work["queue"] = a queue to write data to. If this is specified we run
+#       indefinitely
 #
 # Results return dict:
 #   data["key"] = uniquely identifying key used to return the result data
@@ -104,7 +106,8 @@ class RemoteEditConnectionWorker(threading.Thread):
             self.work["cmd"],
             self.work["prompt_contains"],
             self.work["listen_attempts"],
-            self.work["accept_new_host"]
+            self.work["accept_new_host"],
+            self.work["queue"]
         )
         # Put together the results object and add it to the dict shated with
         # the parent
@@ -124,7 +127,7 @@ class RemoteEditConnectionWorker(threading.Thread):
         self.close_connection()
         self.debug("Thread %s has left the building." % self.threadId)
 
-    def run_command(self, cmd, checkReturn=None, listenAttempts=5, acceptNew=False):
+    def run_command(self, cmd, checkReturn=None, listenAttempts=5, acceptNew=False, q=None):
         self.hostUnknown = False
         # Record which server we're connected to
         self.serverName = self.work["server_name"]
@@ -150,6 +153,8 @@ class RemoteEditConnectionWorker(threading.Thread):
         if cmd and not self.write_command(cmd):
             self.debug("Error writing")
             return False
+        if q:
+            self.read_forever(q)
         buf = ""
         # If not found then try again.
         while listenAttempts > 0:
@@ -270,6 +275,23 @@ class RemoteEditConnectionWorker(threading.Thread):
                     "-" * 44
                 )
             )
+
+    def read_forever(self, q):
+        while True:
+            data = self.read_pipes()[0]
+            if data:
+                q.put(data)
+            if self.process.poll() is not None:
+                self.debug("Process died, starting again")
+                self.run_command(
+                    self.work["cmd"],
+                    self.work["prompt_contains"],
+                    self.work["listen_attempts"],
+                    self.work["accept_new_host"].
+                    self.work["queue"]
+                )
+                break
+            time.sleep(0.4)
 
     def strip(self, s):
         return s.strip()

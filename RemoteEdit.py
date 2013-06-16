@@ -682,7 +682,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         cP["prevDir"] = self.lastDir
         self.do_ls(path, self.unknown_callback_1, cP)
 
-    def do_ls(self, path, callback, cP):
+    def do_ls(self, path, callback, cP, acceptNew=False):
         if self.get_server_setting("sftp_only", False):
             params = ""
             if self.platform != "windows":
@@ -694,7 +694,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             return self.run_sftp_command(
                 cmd,
                 callback=callback,
-                cP=cP
+                cP=cP,
+                acceptNew=acceptNew
             )
         else:
             cmd = "ls %s %s" % (
@@ -704,7 +705,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             return self.run_ssh_command(
                 cmd,
                 callback=callback,
-                cP=cP
+                cP=cP,
+                acceptNew=acceptNew
             )
 
     def unknown_callback_1(self, results, cP):
@@ -781,6 +783,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 ["» Zip '%s' (and optionally download)" % selected],
                 ["» chmod '%s'" % selected],
                 ["» chown '%s'" % selected],
+                ["» tail '%s' in a new tab" % selected],
                 ["» Delete '%s'" % selected]
             ]
             # Show the options
@@ -862,6 +865,15 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.show_list
             )
         elif selection == 9:
+            # tail
+            path = self.join_path(self.lastDir, self.selected)
+            self.connector.tail(
+                path,
+                self.escape_remote_path(path),
+                self.serverName,
+                self.server["settings"]
+            )
+        elif selection == 10:
             # Delete
             if sublime.ok_cancel_dialog(
                 "Are you sure you want to delete %s?" % self.selected,
@@ -1926,7 +1938,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             )
             os.startfile(f)
 
-    def list_directory(self, d, dontLoop=False, forceReload=False, foldersOnly=False, skipOptions=False, callback=None, doCat=None):
+    def list_directory(self, d, dontLoop=False, forceReload=False, foldersOnly=False, skipOptions=False, callback=None, doCat=None, acceptNew=False):
         self.items = []
         self.itemPaths = []
         found = False
@@ -1999,7 +2011,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             cP["doCat"] = doCat
             if not callback:
                 callback = self.list_directory_callback
-            return self.do_ls(d, callback, cP)
+            return self.do_ls(d, callback, cP, acceptNew=acceptNew)
         reData = self.window.active_view().settings().get("reData", None)
         if reData and self.serverName == reData["serverName"]:
             reData["browse_path"] = self.lastDir
@@ -2025,9 +2037,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def list_directory_callback(self, results, cP=None, calledBack=True):
         if not results["success"]:
-            return self.error_message(
-                "Error listing folder %s" % cP["folder"]
-            )
+            if "host_unknown" in results:
+                if sublime.ok_cancel_dialog(
+                    "IMPORTANT! This host has not been seen before, would you like to PERMANENTLY record its fingerprint for later connections?",
+                    "Yes, store the server fingerprint"
+                ):
+                    self.list_directory(self.lastDir, forceReload=cP["forceReload"], callback=self.list_directory_callback, doCat=cP["doCat"], acceptNew=True)
+            else:
+                return self.error_message(
+                    "Error listing folder %s" % cP["folder"]
+                )
         elif "No such file or directory" in results["out"]:
             # Dir not found, up one and try again
             (self.lastDir, tail) = self.split_path(self.lastDir)
@@ -3040,7 +3059,8 @@ class RemoteEditConnector(object):
         dropResults=False,
         acceptNew=False,
         serverName=None,
-        serverSettings=None
+        serverSettings=None,
+        q=None
     ):
         debug("run %s command called with cmd: \"%s\"" % (
             appType,
@@ -3058,6 +3078,7 @@ class RemoteEditConnector(object):
         work["drop_results"] = dropResults
         work["timeout"] = timeout
         work["accept_new_host"] = acceptNew
+        work["queue"] = q
         # Generate a unique key to listen for results on
         m = hashlib.md5()
         m.update(("%s%s" % (cmd, str(time.time()))).encode('utf-8'))
@@ -3068,7 +3089,9 @@ class RemoteEditConnector(object):
         else:
             self.sshQueue.put(work)
         debug("....now on the queue.....")
-        if callback:
+        if q:
+            return
+        elif callback:
             debug("Calling set_timeout to check for results")
             # TODO: This should be totally events driven, have a thread block
             # on a queue and on return of data call a callback. Once we've
@@ -3150,6 +3173,72 @@ class RemoteEditConnector(object):
                 ),
                 100
             )
+
+    def tail(self, path, escapedPath, serverName, serverSettings):
+        q = queue.Queue()
+        tab = self.window.new_file()
+        tab.set_scratch(True)
+        tab.set_name("Tailing %s..." % path)
+        reTailData = {}
+        reTailData["path"] = path
+        reTailData["pos"] = 0
+        # TODO: How to kill the thread when the tab is closed??
+        tab.settings().set("reTailData", reTailData)
+        self.create_ssh_thread()
+        self.run_remote_command(
+            "ssh",
+            "tail -f %s" % escapedPath,
+            checkReturn="",
+            serverName=serverName,
+            serverSettings=serverSettings,
+            q=q
+        )
+        sublime.set_timeout(
+            lambda: self.tail_updater(
+                tab.id(), q
+            ), 1000
+        )
+
+    def tail_updater(self, viewId, q):
+        try:
+            data = q.get_nowait()
+        except queue.Empty:
+            data = ""
+        if data:
+            sublime.active_window().run_command(
+                "remote_edit_tail",
+                {"viewId": viewId, "data": data}
+            )
+        sublime.set_timeout(
+            lambda: self.tail_updater(
+                viewId, q
+            ), 1000
+        )
+
+
+class RemoteEditTailCommand(sublime_plugin.TextCommand):
+    def run(self, edit, viewId, data):
+        view = None
+        if self.view.id() == viewId:
+            view = self.view
+        else:
+            for v in self.view.window().views():
+                if v.id() == viewId:
+                    view = v
+                    break
+        if not view:
+            return sublime.error_message("Unable to locate tab to tail")
+        reTailData = view.settings().get("reTailData")
+        i = view.insert(edit, reTailData["pos"], self.tidy(data))
+        reTailData["pos"] += i
+        view.show(reTailData["pos"])
+        view.settings().set("reTailData", reTailData)
+
+    def tidy(self, text):
+        return "\n".join(map(self.strip, text.split("\n")))
+
+    def strip(self, text):
+        return text.rstrip()
 
 
 def plugin_loaded():
