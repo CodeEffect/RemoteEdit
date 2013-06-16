@@ -413,7 +413,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # If we're not sftp only then see if we've gathered any info on this server
         if not self.get_server_setting("sftp_only") and not self.get_settings().get("%s:ls_version" % self.serverName):
             cmd = "echo $SHELL; grep --version; ls --version"
-            self.run_ssh_command(cmd, callback=self.handle_server_info, skipArithmetic=True)
+            self.run_ssh_command(cmd, callback=self.handle_server_info)
         else:
             self.check_cat()
             self.show_current_path_panel(doCat=False)
@@ -424,8 +424,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "IMPORTANT! This host has not been seen before, would you like to PERMANENTLY record its fingerprint for later connections?",
                 "Yes, store the server fingerprint"
             ):
-                cmd = "echo $SHELL; grep --version; ls --version"
-                self.run_ssh_command(cmd, callback=self.handle_server_info, acceptNew=True, skipArithmetic=True)
+                cmd = "echo $SHELL; grep --version; ls --version;"
+                self.run_ssh_command(cmd, callback=self.handle_server_info, acceptNew=True)
         else:
             # Check we succeeded:
             if not results["success"] or not results["out"]:
@@ -2897,10 +2897,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         return localFolder
 
     def get_arithmetic(self):
-        if "csh" in self.get_settings().get("%s:shell" % self.serverName):
-            return ("echo \"uneeq\"`expr 66666666 + 44444445`\"uneeq\"", "uneeq111111111uneeq")
-        else:
-            return ("echo \"uneeq\"$((66666666 + 44444445))\"uneeq\"", "uneeq111111111uneeq")
+        return ("echo \"uneeq\"`expr 66666666 + 44444445`\"uneeq\"", "uneeq111111111uneeq")
 
     def get_ls_params(self):
         if self.get_settings().get("%s:ls_version" % self.serverName) == "UNIX":
@@ -2917,15 +2914,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         callback=None,
         cP=None,
         dropResults=False,
-        acceptNew=False,
-        skipArithmetic=False
+        acceptNew=False
     ):
         if self.get_server_setting("sftp_only", False):
             return self.error_message("This method is not supported under sftp_only mode. You may enable /disable this setting in your per server settings file.")
-        q = ""
-        a = None
-        if not skipArithmetic:
-            (q, a) = self.get_arithmetic()
+        (q, a) = self.get_arithmetic()
         return self.connector.run_remote_command(
             "ssh",
             cmd + "; " + q,
