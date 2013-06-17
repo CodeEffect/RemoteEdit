@@ -6,5 +6,5 @@
     // server. Note that you must have previously selected a server or configured
     // a default and that you must have a current valid catalogue saved for the
     // server.
-    { "keys": ["super+shift+f5"], "command": "remote_edit", "args": {"fuzzy": "last_server"} }
+    { "keys": ["super+shift+f5"], "command": "remote_edit", "args": {"action": "fuzzy"} }
 ]
