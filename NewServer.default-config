@@ -74,6 +74,8 @@
         "zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
         "mp3", "wav", "bz", "pyc", "ico"
     ],
+    // Don't list files with these extensions in the quick panel or the fuzzy find
+    "dont_list_ext":[],
     // Exclude the below folders when cataloguing the server.
     "cat_exclude_folders": [".svn", ".git"]
 }

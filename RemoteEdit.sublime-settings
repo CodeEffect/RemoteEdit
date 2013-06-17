@@ -21,6 +21,9 @@
         "mp3", "wav", "bz", "pyc", "ico", "bz2", "bz"
     ],
 
+    // Don't list files with these extensions in the quick panel or the fuzzy find
+    "dont_list_ext": [],
+
     // Don't include files or folders with any of these names in the catalogue.
     // This reduces the size of the catalogue by over half and ensures that
     // these files don't come up when searching.
