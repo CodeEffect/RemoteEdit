@@ -2472,7 +2472,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 for o in toDel:
                     del tmpCat[o]
                 for o in options:
-                    tmpCat[o] = options[o]
+                    if o in tmpCat:
+                        tmpCat[o]["/"] = options[o]["/"]
+                    else:
+                        tmpCat[o] = options[o]
                 try:
                     del tmpCat["/NO_INDEX/"]
                 except:
