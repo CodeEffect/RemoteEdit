@@ -35,6 +35,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     fileInfo = False
     showHidden = False
     dontEditExt = []
+    dontListExt = []
     catExcludeFolders = []
     bgCat = 0
     bgCatStep = 0
@@ -376,6 +377,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "dont_edit_ext",
                 []
             )
+            self.dontListExt = self.get_settings().get(
+                "dont_list_ext",
+                []
+            )
             self.catExcludeFolders = self.get_settings().get(
                 "cat_exclude_folders",
                 []
@@ -385,6 +390,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.dontEditExt = self.get_server_setting(
                     "dont_edit_ext",
                     self.dontEditExt
+                )
+                self.dontListExt = self.get_server_setting(
+                    "dont_list_ext",
+                    self.dontListExt
                 )
                 self.catExcludeFolders = self.get_server_setting(
                     "cat_exclude_folders",
@@ -1232,16 +1241,17 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             if self.showHidden or (not self.showHidden and f[0] != "."):
                 # If we have a file
                 if fileDict[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FILE:
-                    self.items.append([
-                        self.join_path(filePath, f),
-                        "%s  %s %s %s %s" % (
-                            oct(fileDict[f]["/"][self.STAT_KEY_PERMISSIONS])[2:5],
-                            self.cat["/CAT_DATA/"]["users"][fileDict[f]["/"][self.STAT_KEY_USER]],
-                            self.cat["/CAT_DATA/"]["groups"][fileDict[f]["/"][self.STAT_KEY_GROUP]],
-                            "" if fileDict[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER else " %s " % self.display_size(fileDict[f]["/"][self.STAT_KEY_SIZE]),
-                            self.display_time(fileDict[f]["/"][self.STAT_KEY_MODIFIED])
-                        )
-                    ])
+                    if f.split(".")[-1] not in self.dontListExt:
+                        self.items.append([
+                            self.join_path(filePath, f),
+                            "%s  %s %s %s %s" % (
+                                oct(fileDict[f]["/"][self.STAT_KEY_PERMISSIONS])[2:5],
+                                self.cat["/CAT_DATA/"]["users"][fileDict[f]["/"][self.STAT_KEY_USER]],
+                                self.cat["/CAT_DATA/"]["groups"][fileDict[f]["/"][self.STAT_KEY_GROUP]],
+                                "" if fileDict[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FOLDER else " %s " % self.display_size(fileDict[f]["/"][self.STAT_KEY_SIZE]),
+                                self.display_time(fileDict[f]["/"][self.STAT_KEY_MODIFIED])
+                            )
+                        ])
                 else:
                     # Else, assume a folder and recurse into it
                     # TODO: Symlinks?
@@ -1980,7 +1990,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                             fileName = "%s/" % f
                         elif fldr[f]["/"][self.STAT_KEY_TYPE] == self.FILE_TYPE_FILE:
                             fileName = f
-                            if foldersOnly:
+                            if foldersOnly or f.split(".")[-1] in self.dontListExt:
                                 continue
                         else:
                             # A symlink
