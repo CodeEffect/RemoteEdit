@@ -281,7 +281,12 @@ class RemoteEditConnectionWorker(threading.Thread):
             )
 
     def read_forever(self, q):
+        i = 0
         while True:
+            # Send a keep alive every minute
+            if i >= 60:
+                self.process.stdin.write(bytes(" ", "utf-8"))
+                i = 0
             data = self.read_pipes()[0]
             if data:
                 q.put(data)
@@ -296,6 +301,7 @@ class RemoteEditConnectionWorker(threading.Thread):
                 )
                 break
             time.sleep(0.4)
+            i += 0.4
 
     def strip(self, s):
         return s.strip()
