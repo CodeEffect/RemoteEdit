@@ -6,7 +6,7 @@
     },
     {
         "command": "remote_edit",
-        "args": {"fuzzy": "last_server"},
+        "args": {"action": "fuzzy"},
         "caption": "Remote Edit Fuzzy File search"
     },
 ]
