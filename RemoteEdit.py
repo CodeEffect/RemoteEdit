@@ -2240,7 +2240,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
             # We should be at a prompt
             if "csh" in self.get_settings().get("%s:shell" % self.serverName):
-                cmd = "cd %s && ( ls %s -R > %s/%sSub.cat ) >&/dev/null; cd %s && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat" % (
+                cmd = "cd %s && ( ls %s -R > %s/%sSub.cat ) >&/dev/null; cd %s && rm -f %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm -f %sSub.cat" % (
                     self.escape_remote_path(self.get_server_setting("cat_path")),
                     self.get_ls_params(),
                     self.escape_remote_path(self.tempPath),
@@ -2252,7 +2252,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     self.serverName
                 )
             else:
-                cmd = "cd %s && ls %s -R > %s/%sSub.cat 2>/dev/null; cd %s && rm %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm %sSub.cat" % (
+                cmd = "cd %s && ls %s -R > %s/%sSub.cat 2>/dev/null; cd %s && rm -f %sSub.tar.gz; tar cfz %sSub.tar.gz %sSub.cat && rm -f %sSub.cat" % (
                     self.escape_remote_path(self.get_server_setting("cat_path")),
                     self.get_ls_params(),
                     self.escape_remote_path(self.tempPath),
