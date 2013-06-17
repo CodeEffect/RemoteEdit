@@ -41,6 +41,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     permsLookup = None
     lsParams = "-lap --time-style=long-iso --color=never"
     unixLsParams = "-lapD\"%Y-%m-%d %H:%M\""
+    osxLsParams = "-lapT"
+    hostInfoCommand = 'echo "S""S""S $SHELL S""S""S"; echo "U""U""U" `uname -s` "U""U""U"; grep --version; ls --version'
     orderBy = "name"
     orderReverse = False
     tempPath = "/tmp"
@@ -411,8 +413,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "/home/%s" % self.get_server_setting("user")
             )
         # If we're not sftp only then see if we've gathered any info on this server
-        if not self.get_server_setting("sftp_only") and not self.get_settings().get("%s:ls_version" % self.serverName):
-            cmd = "echo $SHELL; grep --version; ls --version"
+        if not self.get_server_setting("sftp_only") and (
+            not self.get_settings().get("%s:ls_version" % self.serverName) or
+            not self.get_settings().get("%s:grep_version" % self.serverName) or
+            not self.get_settings().get("%s:shell" % self.serverName) or
+            not self.get_settings().get("%s:os" % self.serverName)
+        ):
+            cmd = self.hostInfoCommand
             self.run_ssh_command(cmd, callback=self.handle_server_info)
         else:
             self.check_cat()
@@ -424,7 +431,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 "IMPORTANT! This host has not been seen before, would you like to PERMANENTLY record its fingerprint for later connections?",
                 "Yes, store the server fingerprint"
             ):
-                cmd = "echo $SHELL; grep --version; ls --version;"
+                cmd = self.hostInfoCommand
                 self.run_ssh_command(cmd, callback=self.handle_server_info, acceptNew=True)
         else:
             # Check we succeeded:
@@ -436,7 +443,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 except:
                     # try once more...
                     self.triedAgain = True
-                    cmd = "echo $SHELL; grep --version; ls --version"
+                    cmd = self.hostInfoCommand
                     return self.run_ssh_command(cmd, callback=self.handle_server_info)
             # Firstly, which ls do I have?
             if "ls: illegal option" in results["out"] or "ls: illegal option" in results["err"]:
@@ -450,22 +457,32 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 else:
                     lsVersion = lsRes.group(1)
             # Next, which grep
-            grepReg = re.compile("^.*\s*grep\s*.*([0-9]+\.[0-9]+\.[0-9]+)\s*.*$", re.MULTILINE)
+            grepReg = re.compile("^.*\s*grep\s*.*([0-9]+\.[0-9]+\.*[0-9]*)\s*.*$", re.MULTILINE)
             grepRes = re.search(grepReg, results["out"])
             if not grepRes:
                 grepVersion = "UNKNOWN"
             else:
                 grepVersion = grepRes.group(1)
+            # Which OS? Need this for detecting OSX targets as they don't support ls -D
+            osReg = re.compile("^UUU\s([a-zA-Z0-9]+)\sUUU\s*$", re.MULTILINE)
+            osRes = re.search(osReg, results["out"])
+            if not osRes:
+                osVersion = "UNKNOWN"
+            else:
+                osVersion = osRes.group(1).lower()
             # Lastly, which shell am I in?
-            line = 1
-            if results["out"].split("\n")[0][0] == "/":
-                line = 0
-            shellVersion = results["out"].split("\n")[line].strip().split("/")[-1]
+            shellReg = re.compile("^SSS\s/.*/([a-zA-Z0-9]+)\sSSS\s*$", re.MULTILINE)
+            shellRes = re.search(shellReg, results["out"])
+            if not shellRes:
+                shellVersion = "UNKNOWN"
+            else:
+                shellVersion = shellRes.group(1).strip().split("/")[-1].lower()
             # Now save the settings back
             settings = {}
             settings["ls_version"] = lsVersion
             settings["grep_version"] = grepVersion
             settings["shell"] = shellVersion
+            settings["os"] = osVersion
             self.save_server_settings(self.serverName, settings)
             self.check_cat()
             self.show_current_path_panel()
@@ -724,10 +741,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             self.maintain_or_download(cP["path"])
         else:
             # We should be a folder, parse the ls and add to the catalogue
+            darwin = "darwin" in self.get_settings().get("%s:os" % self.serverName)
             self.cat = self.parse_ls(
                 self.cat,
                 "./:\n%s" % (results["out"]),
-                cP["path"]
+                cP["path"],
+                darwin=darwin
             )
             self.lastDir = cP["path"]
             self.show_current_path_panel()
@@ -2028,11 +2047,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def parse_list_only_callback(self, results, cP=None):
         if "Not a directory" not in results["out"] and "Permission denied" not in results["out"]:
             # Parse the ls and add to the catalogue (but don't save the file)
+            darwin = "darwin" in self.get_settings().get("%s:os" % self.serverName)
             self.cat = self.parse_ls(
                 self.cat,
                 "./:\n%s" % (results["out"]),
                 cP["folder"],
-                sftpMode=cP["sftpMode"]
+                sftpMode=cP["sftpMode"],
+                darwin=darwin
             )
 
     def list_directory_callback(self, results, cP=None, calledBack=True):
@@ -2078,11 +2099,13 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             (self.lastDir, tail) = self.split_path(cP["folder"])
             return self.show_current_path_panel()
         # Parse the ls and add to the catalogue (but don't save the file)
+        darwin = "darwin" in self.get_settings().get("%s:os" % self.serverName)
         self.cat = self.parse_ls(
             self.cat,
             "./:\n%s" % (results["out"]),
             cP["folder"],
-            sftpMode=cP["sftpMode"]
+            sftpMode=cP["sftpMode"],
+            darwin=darwin
         )
         s = self.list_directory(
             cP["folder"],
@@ -2369,11 +2392,12 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         # [6] - if it's a symlink then record the full destination path
         cat = {}
         catFile = open(fileName, "r", encoding="utf-8", errors="ignore")
-        cat = self.parse_ls(cat, catFile.read(), startAt)
+        darwin = "darwin" in self.get_settings().get("%s:os" % self.serverName)
+        cat = self.parse_ls(cat, catFile.read(), startAt, darwin=darwin)
         catFile.close()
         return cat
 
-    def parse_ls(self, cat, lsData, startAt, users=[], groups=[], sftpMode=False):
+    def parse_ls(self, cat, lsData, startAt, users=[], groups=[], sftpMode=False, darwin=False):
         # Build a lookup dict for quickly converting rwxrwxrwx to an integer
         if not self.permsLookup:
             tmp = {}
@@ -2589,10 +2613,16 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                         )))
                     else:
                         try:
-                            d = int(time.mktime(time.strptime(
-                                "%s %s" % (sl[5], sl[6]),
-                                "%Y-%m-%d %H:%M"
-                            )))
+                            if darwin:
+                                d = int(time.mktime(time.strptime(
+                                    "%s-%s-%s %s" % (sl[8], sl[5], sl[6], sl[7]),
+                                    "%Y-%b-%d %H:%M:%S"
+                                )))
+                            else:
+                                d = int(time.mktime(time.strptime(
+                                    "%s %s" % (sl[5], sl[6]),
+                                    "%Y-%m-%d %H:%M"
+                                )))
                         except:
                             debug("Can't parse date at line: \"%s\"" % line)
                             continue
@@ -2901,7 +2931,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
 
     def get_ls_params(self):
         if self.get_settings().get("%s:ls_version" % self.serverName) == "UNIX":
-            return self.unixLsParams
+            if "darwin" in self.get_settings().get("%s:os" % self.serverName):
+                return self.osxLsParams
+            else:
+                return self.unixLsParams
         else:
             return self.lsParams
 
