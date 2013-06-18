@@ -566,7 +566,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                     exclude += "--exclude-dir=\"%s\" " % f
         # Direct the grep output to a file and download it to parse
         if "csh" in self.get_settings().get("%s:shell" % self.serverName):
-            cmd = "cd %s && ( grep -i %s-nR -A2 -B2 \"%s\" . %s> %s) >&/dev/null;" % (
+            cmd = "cd %s && ( grep -i %s-nR -A2 -B2 \"%s\" . %s> %s) >&/dev/null" % (
                 self.escape_remote_path(self.lastDir),
                 exclude,
                 self.escape_remote_path(search),
@@ -574,7 +574,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
                 self.escape_remote_path(remotePath)
             )
         else:
-            cmd = "cd %s && grep -i %s-nR -A2 -B2 \"%s\" . %s> %s 2>/dev/null;" % (
+            cmd = "cd %s && grep -i %s-nR -A2 -B2 \"%s\" . %s> %s 2>/dev/null" % (
                 self.escape_remote_path(self.lastDir),
                 exclude,
                 self.escape_remote_path(search),
