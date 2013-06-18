@@ -1,13 +1,13 @@
 # Remote Edit #
 
-A plugin for Sublime Text 3 for editing files over SFTP.
+A plugin for Sublime Text 3 for editing files over SFTP. Works from Windows, Mac and Linux.
 
 ## Details ##
 
-This plugin allows you to configure a list of *nix servers and connect to them over SSH / SFTP to edit and manage files. To make browsing and searching as fast as possible the plugin creates a local cache of the files you're working on, this allows fuzzy file name searching of your server in the same way that CTRL+P works against your local files. The plugin also allows you to search for text in remote files and presents the results in the same way that CTRL+SHIFT+F does.
+This plugin allows you to configure a list of *nix servers and connect to them over SSH / SFTP to edit and manage files. To make browsing and searching as fast as possible the plugin creates a local cache of the files, allowing fuzzy file name searching of your server in the manner of CTRL+P against local files. The plugin also allows you to search for text within remote files, presenting the results in the same way that CTRL+SHIFT+F does.
 
 ## IMPORTANT - Please read ##
-The plugin is very new code that hasn't received a great deal of testing. Due to its relative infancy the plugin is still under very active development. The code base changes quickly and by large amounts.
+Due to the relative infancy of the plugin the code is still under active development.
 
 Because of this (and because you should anyway!) please ensure that you have good backups of any files that you will be working with. **Do not** use this plugin against production environments or anywhere where your uptime matters.
 
@@ -31,21 +31,26 @@ Once the plugin is installed just tap `F5` and select the first option `Add a ne
 Once saved, another tap of `F5` should allow you to select your server then browse it.
 
 ## Features ##
+ - Connects to Linux, BSD and OSX remote hosts.
+ - Assesses server OS and app versions on first connect allowing it to get the most out of each remote server.
  - List and browse remote files, optionally displaying extended file information such as permissions, owner, size and modified date.
  - Bookmark frequently used files and folders on a per-server basis.
  - Open, edit and save the same files seamlessly from within Sublime Text.
- - Sort file listing by filename, last modified, size
- - Filter hidden files including VCS metadata
+ - Sort file listing by file name, file extensions, last modified and file size.
+ - Filter hidden files including VCS metadata.
  - Fast fuzzy file name search that replicates CTRL+P against remote servers.
  - Search inside files by running a search on the remote server. Results are presented as current CTRL+SHIFT+F results are. CTRL + double click will open the file and take you to the appropriate line.
  - Create new files and folders. Chmod, chown, rename, delete, move and copy existing ones.
  - Compress individual files or recursively against whole directories. Zip, bzip, gzip or lzma should all be available if your platform supports them. The compressed file can optionally be scheduled to download after creation.
  - SFTP only mode with reduced functionality to ensure that you will always be able to connect and edit.
+ - Offers tail functionality allowing you to have your apache log file open in its own tab, live updating while you work.
+ - Can present server uptime and load information in the Sublime status bar.
+
 
 ## Known Issues ##
 
  - It totally spanks your .bash_history with ls's
- - As SSH is used for some functionality and app versions and command line switches differ there will be many issues with switches not being supported or being different. If you can, please take the time to report any issues that you're having. The more you are able to help out, the better the plugin will become.
+ - As SSH is used for some functionality and app versions / command line switches differ there are some issues with certain switches not being supported. Whilst this is becominging much less frequent, if it does happen to you, please take the time to report any issues that you do have. The more you are able to help out, the better the plugin will become.
 
 ## Default key bindings ##
 
