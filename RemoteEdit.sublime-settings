@@ -17,15 +17,22 @@
 	// you will just get the maintenance step in between whether it's enabled
 	// or not.
 	"dont_edit_ext": [
-        "zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
-        "mp3", "wav", "bz", "pyc", "ico", "bz2", "bz"
-    ],
+		"zip", "gz", "tar", "7z", "rar", "jpg", "jpeg", "png", "gif", "exe",
+		"mp3", "wav", "bz", "pyc", "ico", "bz2", "bz"
+	],
 
-    // Don't list files with these extensions in the quick panel or the fuzzy find
-    "dont_list_ext": [],
+	// Don't list files with these extensions in the quick panel or the fuzzy find
+	"dont_list_ext": [],
 
-    // Don't include files or folders with any of these names in the catalogue.
-    // This reduces the size of the catalogue by over half and ensures that
-    // these files don't come up when searching.
-    "cat_exclude_folders": [".svn", ".git"]
+	// Don't include files or folders with any of these names in the catalogue.
+	// This reduces the size of the catalogue by over half and ensures that
+	// these files don't come up when searching.
+	"cat_exclude_folders": [".svn", ".git"]
+
+	// Display uptime information from the currently connected server.
+	// Please raise an issue on github if there are other stats / figures you'd
+	// like to have the option of displaying. At present there is just uptime
+	// which shows hostname and the output of the uptime command.
+	//"status_bar_type": "uptime",
+	//"status_bar_period": 30
 }

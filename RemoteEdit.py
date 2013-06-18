@@ -50,6 +50,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     timeout = 60
     connector = None
     platform = sublime.platform()
+    statusBarUpdater = False
     FILE_TYPE_FILE = 0
     FILE_TYPE_FOLDER = 1
     FILE_TYPE_SYMLINK = 2
@@ -82,12 +83,10 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     # status bar busy
     # Server health (disks, htop etc) Status bar?
     # keepalives
-    # host key not cached
     # SVN switch etc etc for configured dir's
 
     #  No fucking interactive shit ubuntu!!!!!
     #  no access to tty bad file description (shut the fuck up again!!!!)
-    #  Tail a log file, awesome!!!!!
 
     def run(self, fileName=None, serverName=None, lineNumber=None, action=None, save=None):
         # Ensure that the self.servers dict is populated
@@ -433,6 +432,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         else:
             self.check_cat()
             self.show_current_path_panel(doCat=False)
+            if not self.statusBarUpdater and self.get_settings().get("status_bar_type"):
+                self.start_status_bar_update()
 
     def handle_server_info(self, results):
         if "host_unknown" in results:
@@ -2835,6 +2836,43 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     def success_message(self, msg):
         sublime.message_dialog(msg)
         return True
+
+    def start_status_bar_update(self):
+        m = hashlib.md5()
+        m.update(("%s%s" % (self.serverName, str(time.time()))).encode('utf-8'))
+        self.statusBarUpdater = m.hexdigest()
+        self.status_bar_update(self.statusBarUpdater)
+
+    def status_bar_update(self, key):
+        if key != self.statusBarUpdater:
+            return
+        updateType = self.get_settings().get("status_bar_type")
+        updatePeriod = int(self.get_settings().get("status_bar_period", 60)) * 1000
+        cmd = ""
+        if updateType == "uptime":
+            cmd = 'echo "S""S""S"`hostname; uptime`"S""S""S"'
+
+        if cmd:
+            if self.serverName:
+                self.run_ssh_command(cmd, callback=self.update_status_bar)
+            else:
+                self.window.active_view().set_status(
+                    "RemoteEditStatus",
+                    "Status: No server selected"
+                )
+            sublime.set_timeout(
+                lambda: self.status_bar_update(key), updatePeriod
+            )
+
+    def update_status_bar(self, results):
+        if results["success"]:
+            statusReg = re.compile("^SSS(.*)SSS\s*$", re.MULTILINE)
+            update = re.search(statusReg, results["out"])
+            if update:
+                self.window.active_view().set_status(
+                    "RemoteEditStatus",
+                    "Status: %s" % update.group(1)
+                )
 
     def escape_remote_path(self, path):
         if " " in path:
