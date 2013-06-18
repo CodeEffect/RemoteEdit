@@ -84,6 +84,7 @@ class RemoteEditConnectionWorker(threading.Thread):
                 self.debug("End work loop")
             else:
                 time.sleep(holdYerHorses)
+        self.debug("He killed me with a sword. How weird is that?")
 
     def process_work_and_respond(self):
         # Check to see if we've been told to terminate
@@ -154,7 +155,7 @@ class RemoteEditConnectionWorker(threading.Thread):
             self.debug("Error writing")
             return False
         if q:
-            self.read_forever(q)
+            return self.read_forever(q)
         buf = ""
         # If not found then try again.
         while listenAttempts > 0:
@@ -283,6 +284,19 @@ class RemoteEditConnectionWorker(threading.Thread):
     def read_forever(self, q):
         i = 0
         while True:
+            # See if we've been told to quit
+            try:
+                data = q.get_nowait()
+                if "{{%%KILL%%}}" in data:
+                    self.process.terminate()
+                    self.process = None
+                    self.quit = True
+                    break
+                elif data:
+                    # Put the data back on the queue
+                    q.put(data)
+            except queue.Empty:
+                pass
             # Send a keep alive every minute
             if i >= 60:
                 self.process.stdin.write(bytes(" ", "utf-8"))

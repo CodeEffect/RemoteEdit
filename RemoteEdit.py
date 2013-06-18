@@ -88,7 +88,7 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     #  No fucking interactive shit ubuntu!!!!!
     #  no access to tty bad file description (shut the fuck up again!!!!)
 
-    def run(self, fileName=None, serverName=None, lineNumber=None, action=None, save=None):
+    def run(self, fileName=None, serverName=None, lineNumber=None, action=None, save=None, viewId=None):
         # Ensure that the self.servers dict is populated
         self.load_server_list()
         # Load the connector
@@ -103,6 +103,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # open but occasionally if a command fails halfway through it doesn't
             # keep things tidy
             self.tidy_local_tmp_path()
+        elif action == "kill":
+            self.connector.killTab(viewId)
         elif action == "fuzzy":
             # If fuzzy was passed as a command arg then we display the fuzzy file
             # list from the catalogue
@@ -2205,13 +2207,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             ## GO!
             self.cat_server()
         self.load_cat()
-        # TODO: check bgCat for X minx in past, if too long then trigger the
-        # download again
 
     def cat_server(self, results=None, cp=None):
-        # TODO set a flag for known hosts after first connect
-        # if the flag is set we can punt the plink query straight into the
-        # background thread without worrying about known hosts
         if not cp:
             self.bgCatStep = 0
             cp = {}
@@ -3051,6 +3048,7 @@ class RemoteEditConnector(object):
     sftpQueue = None
     sftpThreads = []
     timeout = 60
+    tailClosedTabs = []
 
     def __init__(self, window):
         self.window = window
@@ -3064,6 +3062,9 @@ class RemoteEditConnector(object):
             self.create_ssh_thread()
         if not self.sftpThreads:
             self.create_sftp_thread()
+
+    def killTab(self, viewId):
+        self.tailClosedTabs.append(viewId)
 
     def create_sftp_thread(self):
         key = len(self.sftpThreads)
@@ -3263,7 +3264,6 @@ class RemoteEditConnector(object):
         reTailData = {}
         reTailData["path"] = path
         reTailData["pos"] = 0
-        # TODO: How to kill the thread when the tab is closed??
         tab.settings().set("reTailData", reTailData)
         self.create_ssh_thread()
         self.run_remote_command(
@@ -3272,7 +3272,8 @@ class RemoteEditConnector(object):
             checkReturn="",
             serverName=serverName,
             serverSettings=serverSettings,
-            q=q
+            q=q,
+            dropResults=True
         )
         sublime.set_timeout(
             lambda: self.tail_updater(
@@ -3283,6 +3284,13 @@ class RemoteEditConnector(object):
     def tail_updater(self, viewId, q):
         try:
             data = q.get_nowait()
+            # While we're here, check to see if the tab has been closed
+            if viewId in self.tailClosedTabs:
+                q.put("{{%%KILL%%}}")
+                debug("Killing SSH thread for view id %s" % viewId)
+                # Remove viewId from list
+                self.tailClosedTabs.remove(viewId)
+                return
         except queue.Empty:
             data = ""
         if data:
@@ -3322,11 +3330,239 @@ class RemoteEditTailCommand(sublime_plugin.TextCommand):
         return text.rstrip()
 
 
-def plugin_loaded():
-    sublime.active_window().run_command(
-        "remote_edit",
-        {"action": "on_app_start"}
-    )
+class RemoteEditMarkDirtyCommand(sublime_plugin.TextCommand):
+    def run(self, edit, id=None):
+        if id != self.view.id():
+            return sublime.error_message("Error marking file as dirty")
+        regionPart = sublime.Region(0, 1)
+        regionText = self.view.substr(regionPart)
+        self.view.replace(edit, regionPart, regionText)
+
+
+class RemoteEditListFolderCommand(sublime_plugin.TextCommand):
+    def run(self, edit, path="", contents=""):
+        print("Listing folder %s" % path)
+        results = self.view.window().new_file()
+        results.set_name("Files and folders at %s" % path)
+        newRegion = sublime.Region(1, 0)
+        results.replace(edit, newRegion, contents)
+
+
+class RemoteEditDisplaySearchCommand(sublime_plugin.TextCommand):
+    def run(self, edit, search="", serverName="", filePath="", baseDir=""):
+        try:
+            lf = open(filePath, "r", encoding="utf-8", errors="ignore")
+            results = lf.read()
+            lf.close()
+        except:
+            return sublime.error_message("Error searching remote server")
+        # Parse the results
+        i = 0
+        matches = 0
+        files = {}
+        inResult = False
+        resultsText = []
+        resultsText.append("Searching for \"%s\" on %s. CTRL + double click to open the result.\n" % (
+            search,
+            serverName
+        ))
+        aroundLine = re.compile("\.\/(.+)-([0-9]+)-(.*)")
+        resultLine = re.compile("\.\/(.+):([0-9]+):(.*)")
+        for line in results.split("\n"):
+            i += 1
+            if i is 1:
+                # First line is our search command
+                continue
+            if "uneeq111111111uneeq" in line:
+                # We're done
+                break
+            if line and line[0:2] == "--":
+                inResult = False
+                continue
+            aroundMatch = re.search(aroundLine, line)
+            resultMatch = re.search(resultLine, line)
+            if aroundMatch:
+                fileName = aroundMatch.group(1)
+            elif resultMatch:
+                fileName = resultMatch.group(1)
+            if not inResult and (resultMatch or aroundMatch):
+                inResult = True
+                if aroundMatch and aroundMatch.group(1) in files:
+                    resultsText.append("  ..\n")
+                else:
+                    resultsText.append("\n%s/%s:\n" % (
+                        baseDir.rstrip("/"),
+                        fileName
+                    ))
+            if aroundMatch:
+                files[aroundMatch.group(1)] = True
+                resultsText.append("  %s%s\n" % (
+                    aroundMatch.group(2).ljust(5),
+                    aroundMatch.group(3).rstrip()
+                ))
+            if resultMatch:
+                files[resultMatch.group(1)] = True
+                matches += 1
+                tmp = resultMatch.group(3).rstrip()
+                rLine = ""
+                if len(tmp) > 200:
+                    startAt = 0
+                    while tmp.find(search, startAt) != -1:
+                        key = tmp.find(search, startAt)
+                        rLine += "………%s………  " % tmp[max(key - 15, 0):max(key + len(search) + 15, 0)]
+                        startAt = key + len(search)
+                else:
+                    rLine = tmp
+                ln = "%s:" % resultMatch.group(2)
+                resultsText.append("  %s%s\n" % (
+                    ln.ljust(5),
+                    rLine
+                ))
+        resultsText.append("\n%s matche%s across %s file%s\n\n" % (
+            matches,
+            "" if matches is 1 else "s",
+            len(files),
+            "" if len(files) is 1 else "s"
+        ))
+        try:
+            os.remove(filePath)
+        except:
+            pass
+        # Open a new tab
+        results = self.view.window().new_file()
+        results.settings().set("reResults", "SET")
+        results.settings().set("serverName", serverName)
+        results.set_scratch(True)
+        results.set_name("Find Results on %s" % serverName)
+        newRegion = sublime.Region(1, 0)
+        results.set_syntax_file("Packages/Default/Find Results.hidden-tmLanguage")
+        results.replace(edit, newRegion, "".join(resultsText))
+        print(results.settings().get("reResults"), self.view.settings().get("reResults"))
+
+
+class RemoteEditEvents(sublime_plugin.EventListener):
+    def on_pre_save_async(self, view):
+        reData = view.settings().get("reData", None)
+        if reData:
+            reData["local_save"] = time.time()
+            view.settings().set("reData", reData)
+            view.window().run_command(
+                "remote_edit", {
+                    "action": "save",
+                    "save": view.id()
+                }
+            )
+
+    def on_pre_close(self, view):
+        reTailData = view.settings().get("reTailData", None)
+        if reTailData:
+            # This is a tail tab, just let the main process know the view id and
+            # it will tidy itself up
+            sublime.active_window().run_command(
+                "remote_edit",
+                {"action": "kill", "viewId": view.id()}
+            )
+        reData = view.settings().get("reData", None)
+        if reData:
+            filePath = view.file_name()
+            tmp = os.path.expandvars("%temp%")
+            # Check it has been remotely saved, ok/cancel if not
+            if filePath and tmp in filePath and os.path.exists(filePath):
+                deleteMe = True
+                localSave = 0
+                remoteSave = 0
+                if "local_save" in reData:
+                    localSave = reData["local_save"]
+                if "remote_save" in reData:
+                    remoteSave = reData["remote_save"]
+                if view.is_dirty():
+                    # User will be prompted to save it anyway
+                    # Loop until local_save is set
+                    # then give it 30 seconds for remote save to be set
+                    # if it doesn't happen then show an error message
+                    # if it does then delete the file
+                    #
+                    # TODO: IS THIS REQUIRED???
+                    pass
+                elif remoteSave < localSave:
+                    # A save has failed at some point but the view is not
+                    # currently dirty.
+                    view.window().run_command(
+                        "remote_edit",
+                        {"action": "save", "save": view.id()}
+                    )
+                    # Kick off the save and wait. If not successful display an
+                    # error message. Otherwise delete
+                    wait = 30
+                    deleteMe = False
+                    while wait > 0:
+                        reData = view.settings().get("reData", None)
+                        if "local_save" in reData:
+                            localSave = reData["local_save"]
+                        if "remote_save" in reData:
+                            remoteSave = reData["remote_save"]
+                        if remoteSave >= localSave:
+                            deleteMe = True
+                            break
+                        time.sleep(1)
+                        wait -= 1
+                if deleteMe:
+                    sublime.set_timeout(
+                        lambda: os.remove(filePath),
+                        1000
+                    )
+                else:
+                    fileName = os.path.split(filePath)[1]
+                    sublime.error_message(
+                        "File \"%s\" has unsaved remote modifications. You may find a local copy at \"%s\"" % (
+                            fileName,
+                            filePath
+                        )
+                    )
+                    print("ERROR, REMOTE FILE %s UNSAVED" % fileName)
+
+
+class RemoteEditMouseCommand(sublime_plugin.TextCommand):
+    def get_result_region(self, pos):
+        line = self.view.line(pos)
+        return line
+
+    def run(self, edit):
+        if not self.view.settings().get("reResults"):
+            return
+        serverName = self.view.settings().get("serverName")
+        # Get selected line
+        pos = self.view.sel()[0].end()
+        result = self.get_result_region(pos)
+        line = self.view.substr(sublime.Region(result.a, result.b))
+        # Look for a line number
+        lineRe = re.compile("\s([0-9]+):{0,1}\s*.*")
+        lineNumberMatch = re.search(lineRe, line)
+        if not lineNumberMatch:
+            return
+        lineNumber = lineNumberMatch.group(1)
+        # Now work back until we hit a file name
+        fileName = ""
+        searchPos = result.a - 1
+        fileRe = re.compile("^(/.*):$")
+        while not fileName:
+            result = self.get_result_region(searchPos)
+            line = self.view.substr(sublime.Region(result.a, result.b))
+            fileMatch = re.search(fileRe, line)
+            if fileMatch:
+                fileName = fileMatch.group(1)
+            searchPos = max(result.a - 1, 0)
+            if not searchPos:
+                break
+        if not fileName:
+            return
+        print(serverName, fileName, lineNumber)
+        # Now just to open fileName at lineNumber
+        self.view.window().run_command("remote_edit", {
+            "serverName": serverName,
+            "fileName": fileName,
+            "lineNumber": lineNumber
+        })
 
 
 def debug(data):
@@ -3334,3 +3570,10 @@ def debug(data):
         print("MAIN %s: %s" % (time.strftime("%H:%M:%S"), data[0:3000]))
     else:
         print("MAIN %s: %s" % (time.strftime("%H:%M:%S"), data))
+
+
+def plugin_loaded():
+    sublime.active_window().run_command(
+        "remote_edit",
+        {"action": "on_app_start"}
+    )
