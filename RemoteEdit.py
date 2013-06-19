@@ -3341,7 +3341,7 @@ class RemoteEditMarkDirtyCommand(sublime_plugin.TextCommand):
 
 class RemoteEditListFolderCommand(sublime_plugin.TextCommand):
     def run(self, edit, path="", contents=""):
-        print("Listing folder %s" % path)
+        debug("Listing folder %s" % path, "LIST")
         results = self.view.window().new_file()
         results.set_name("Files and folders at %s" % path)
         newRegion = sublime.Region(1, 0)
@@ -3437,7 +3437,6 @@ class RemoteEditDisplaySearchCommand(sublime_plugin.TextCommand):
         newRegion = sublime.Region(1, 0)
         results.set_syntax_file("Packages/Default/Find Results.hidden-tmLanguage")
         results.replace(edit, newRegion, "".join(resultsText))
-        print(results.settings().get("reResults"), self.view.settings().get("reResults"))
 
 
 class RemoteEditEvents(sublime_plugin.EventListener):
@@ -3519,7 +3518,6 @@ class RemoteEditEvents(sublime_plugin.EventListener):
                             filePath
                         )
                     )
-                    print("ERROR, REMOTE FILE %s UNSAVED" % fileName)
 
 
 class RemoteEditMouseCommand(sublime_plugin.TextCommand):
@@ -3556,7 +3554,9 @@ class RemoteEditMouseCommand(sublime_plugin.TextCommand):
                 break
         if not fileName:
             return
-        print(serverName, fileName, lineNumber)
+        debug("Server: %s, File: %s, Line: %s" % (
+            serverName, fileName, lineNumber
+        ), "MOUSE")
         # Now just to open fileName at lineNumber
         self.view.window().run_command("remote_edit", {
             "serverName": serverName,
@@ -3565,11 +3565,11 @@ class RemoteEditMouseCommand(sublime_plugin.TextCommand):
         })
 
 
-def debug(data):
+def debug(data, app="MAIN"):
     if len(data) > 3000:
-        print("MAIN %s: %s" % (time.strftime("%H:%M:%S"), data[0:3000]))
+        print("%s %s: %s" % (app, time.strftime("%H:%M:%S"), data[0:3000]))
     else:
-        print("MAIN %s: %s" % (time.strftime("%H:%M:%S"), data))
+        print("%s %s: %s" % (app, time.strftime("%H:%M:%S"), data))
 
 
 def plugin_loaded():
