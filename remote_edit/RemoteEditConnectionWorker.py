@@ -285,23 +285,21 @@ class RemoteEditConnectionWorker(threading.Thread):
         i = 0
         while True:
             # See if we've been told to quit
+            checkData = ""
             try:
-                data = q.get_nowait()
-                if "{{%%KILL%%}}" in data:
+                checkData = q.get_nowait()
+                if "{{%%KILL%%}}" in checkData:
                     self.process.terminate()
                     self.process = None
                     self.quit = True
                     break
-                elif data:
-                    # Put the data back on the queue
-                    q.put(data)
             except queue.Empty:
                 pass
             # Send a keep alive every minute
             if i >= 60:
                 self.process.stdin.write(bytes(" ", "utf-8"))
                 i = 0
-            data = self.read_pipes()[0]
+            data = checkData + self.read_pipes()[0]
             if data:
                 q.put(data)
             if self.process.poll() is not None:
