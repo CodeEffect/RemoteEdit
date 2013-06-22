@@ -149,6 +149,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
         else:
             # Lastly, no serer has yet been selected, display the server list and
             # other options
+            # Reload it to be sure we have the latest changes
+            self.load_server_list(force=True)
             self.items = [name for name in sorted(self.servers)]
             items = [[
                 "  %s (%s)" % (name, self.servers[name]["settings"]["host"]),
@@ -167,8 +169,8 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             ])
             self.show_quick_panel(items, self.handle_server_select)
 
-    def load_server_list(self):
-        if self.servers:
+    def load_server_list(self, force=False):
+        if self.servers and not force:
             return
         # Load all files in User/RemoteEdit/Servers folder
         serverConfigPath = self.get_server_config_path()
