@@ -89,6 +89,11 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
     #  no access to tty bad file description (shut the fuck up again!!!!)
 
     def run(self, fileName=None, serverName=None, lineNumber=None, action=None, save=None, viewId=None):
+        if action == "on_app_start":
+            # Tidy up our local temp folder. This should only contain files that are
+            # open but occasionally if a command fails halfway through it doesn't
+            # keep things tidy
+            return self.tidy_local_tmp_path()
         # Ensure that the self.servers dict is populated
         self.load_server_list()
         # Load the connector
@@ -98,11 +103,6 @@ class RemoteEditCommand(sublime_plugin.WindowCommand):
             # If save was called from the external RE events handler class then save
             # the file back to the server
             self.save(save)
-        elif action == "on_app_start":
-            # Tidy up our local temp folder. This should only contain files that are
-            # open but occasionally if a command fails halfway through it doesn't
-            # keep things tidy
-            self.tidy_local_tmp_path()
         elif action == "kill":
             self.connector.killTab(viewId)
         elif action == "fuzzy":
